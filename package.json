@@ -1,0 +1,31 @@
+{
+  "name": "china-railway-train-sim",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "cesium": "1.127.0",
+    "vue": "3.5.13"
+  },
+  "overrides": {
+    "@cesium/engine": "15.0.0",
+    "@cesium/widgets": "11.0.0",
+    "@zip.js/zip.js": "2.7.57"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.7",
+    "@vitejs/plugin-vue": "5.2.1",
+    "@vue/tsconfig": "0.7.0",
+    "typescript": "5.7.3",
+    "vite": "6.1.0",
+    "vite-plugin-cesium": "1.2.23",
+    "vitest": "3.0.5",
+    "vue-tsc": "2.2.0"
+  }
+}
