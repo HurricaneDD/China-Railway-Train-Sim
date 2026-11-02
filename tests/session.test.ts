@@ -148,3 +148,32 @@ describe('驾驶与编组', () => {
     expect(session.routeEnd).toBe(true);
   });
 });
+
+describe('人工检查倍速', () => {
+  it('只接受配置中的 1/5/10/20 倍速', () => {
+    const { session } = sessionOnLine();
+    expect(session.setSimulationSpeed(5)).toBe(true);
+    expect(session.simulationSpeed).toBe(5);
+    expect(session.setSimulationSpeed(7)).toBe(false);
+    expect(session.simulationSpeed).toBe(5);
+    expect(session.setSimulationSpeed(20)).toBe(true);
+    expect(session.simulationSpeed).toBe(20);
+  });
+
+  it('20 倍速下十帧 100ms 真实帧推进约 20 秒模拟时间', () => {
+    let frame: FrameRequestCallback | undefined;
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
+    vi.stubGlobal('cancelAnimationFrame', () => {});
+    const { session, internals } = sessionOnLine();
+    session.running = true;
+    session.paused = false;
+    session.setSimulationSpeed(20);
+    const start = 1_000;
+    const now = vi.spyOn(performance, 'now').mockReturnValue(start);
+    (internals as unknown as { startLoop(): void }).startLoop();
+    for (let index = 1; index <= 10; index++) frame!(start + index * 100);
+    expect(session.elapsed).toBeCloseTo(20, 1);
+    session.stop();
+    now.mockRestore();
+  });
+});

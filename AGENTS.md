@@ -12,7 +12,7 @@
 - 架构：Vue 3 + TypeScript + Vite + CesiumJS 的纯前端静态应用。
 - 运行与存档均在浏览器本地完成；无后端、无账号、无云数据库、无 Cookie 进度。
 - 部署目标：GitHub Pages 仓库子路径。Vite `base` 为 `./`，不硬编码仓库名。
-- 当前版本：Demo 0.2（全国自由驾驶），存档结构继续使用 V1；首次开发日期 2026-11-01。
+- 当前版本：Demo 0.2（全国自由驾驶）+ 线路人工检查工具；存档结构继续使用 V1；首次开发日期 2026-11-01。
 
 ## 2. 开发命令与依赖
 
@@ -49,8 +49,17 @@ China-Railway-Train-Sim-Kimi/
 ├─ package.json                  脚本和固定版本依赖
 ├─ package-lock.json             可复现依赖锁文件，Actions 使用 npm ci
 ├─ tsconfig.json                 TS/DOM/路径别名配置
-├─ vite.config.ts                Vue/Cesium、相对 base、开发数据中间件、构建复制
+├─ vite.config.ts                Vue/Cesium、相对 base、多页面入口、开发数据中间件、构建复制
 ├─ AGENTS.md                     本说明，后续开发必读
+├─ dev/
+│  └─ raliway-check/             线路人工检查页（目录名沿用用户指定拼写）
+│     ├─ index.html              嵌套页面入口
+│     ├─ main.ts                 Vue 启动
+│     ├─ Inspector.vue           分省加载、断点列表、详情与导出
+│     ├─ RailwayMap.vue          2D Canvas 线路与断点绘制
+│     ├─ analysis.ts             断点、被过滤连接、最近线路与弱分量分析
+│     ├─ style.css               检查页独立样式
+│     └─ README.md               使用方式、规则与限制
 ├─ .github/workflows/deploy.yml  GitHub Pages 自动构建部署
 ├─ data/                         用户提供的正式数据，保持原字段和含义
 │  ├─ README.md                  数据权威说明
@@ -92,7 +101,9 @@ China-Railway-Train-Sim-Kimi/
 └─ tests/
    ├─ geo.test.ts                线段投影和里程
    ├─ dynamics.test.ts           制动、惯性、坡度、黏着与撒砂
-   └─ storage.test.ts            错误存档拒绝
+   ├─ storage.test.ts            错误存档拒绝
+   ├─ railway-check.test.ts      检查页断点分类、间隙与桥隧过渡
+   └─ ...                        拓扑、会话、渲染、全国回归
 ```
 
 ## 4. 核心实现方法
@@ -112,7 +123,7 @@ China-Railway-Train-Sim-Kimi/
 - 保留 `osm_id/layer/name/bridge/tunnel/province`；`bridge/tunnel` 仅在字符串严格等于 `T` 时为真。
 - 以 `(osm_id, layer)` 去重；同一个 Feature 的各 part 使用不同派生区段 ID。
 - 原始文件不添加节点字段。程序内部生成 `node-*` 节点和 `<adcode>:<feature>:<part>` 区段 ID。
-- 节点仍按默认 2 m 容差生成几何候选；实际驾驶连接另按切线、0.25 m 间隙和桥隧/层级变化判定，隔离接近掉头及证据不足的连接。规则和误判边界见 `docs/RAILWAY-TOPOLOGY.md`。不连接仅在折线中间二维相交的线路，不移动原始坐标。
+- 节点仍按默认 2 m 容差生成几何候选；实际驾驶连接另按切线、0.25 m 间隙和桥隧/层级变化判定，隔离接近掉头及证据不足的连接。**原始坐标完全重合的共享端点（间隙 < 0.01 m）不再因桥/隧/`layer` 标签差异被切断**：35° 内保留为 `uncertain` 候选，桥隧直连、桥与桥不同层、层差 2–3 也按几何连续性推定。非共享端点（0.01–0.25 m）仍保守筛选。规则、江苏实测和误判边界见 `docs/RAILWAY-TOPOLOGY.md`。不连接仅在折线中间二维相交的线路，不移动原始坐标。
 - 节点除原始折线端点外，还识别端点接入另一折线已有内部顶点的位置。`nextBoundary/exitsAt` 在原始区段里程上返回下一个连接位置与有向出口，不切分或改写原始折线，也不改变原区段 ID。内部接入时保留原折线继续行驶的出口。仅几何交叉、没有已有共享顶点的线不连接。
 - 只有一个出口时自动续行；前进遇多个出口需玩家选择，倒车可沿已记录走廊回溯。完全相同的跨省几何以 ID 别名共享，裁切不同部分保留，恢复会补载 ID 来源省份。
 - 端点连接容差是几何近似，不是真实铁路联锁或信号系统。
@@ -171,16 +182,33 @@ China-Railway-Train-Sim-Kimi/
 - 导出为单个 JSON 文件；删除需用户在界面确认；同 ID 导入另存副本。IndexedDB 等待 transaction.oncomplete，最终 abort 会报错；校验地理范围、历史单调性和编组数值。
 - `localStorage` 只存音效、自动保存、相机距离和轨道显示范围。
 
+### 4.8 模拟倍速
+
+- HUD 行程条提供 1× / 5× / 10× / 20×。`GameSession.simulationSpeed` 只放大每真实帧加入累加器的模拟时间，物理仍以 1/60 秒固定步长逐 tick 推进，不把 `dt` 直接乘 20。
+- 每帧最多 300 个物理步，超出后清空积压，防止卡顿后瞬移；切换倍速会清空累加器。
+- 按键重复、坡度采样、邻省预载、自动保存按真实时间节流（阈值乘以倍速）；`elapsed`、里程和存档仍是模拟时间/模拟位置。
+- 新行程和存档恢复回到 1×；分岔、线路中断、暂停和失焦逻辑不变。20× 下地形坡度仍按真实时间刷新，长距离高速行驶会滞后于真实纵断面，这是已知边界。
+
+### 4.9 线路人工检查
+
+- 页面位于 `dev/raliway-check/`，开发地址 `/dev/raliway-check/`，构建输出 `dist/dev/raliway-check/index.html`。它是只读工具，不修改正式数据、不写存档、不参与驾驶。
+- `analysis.ts` 复用 `RailNetwork.boundariesOf/connectionsAt/segmentsNear`，按省统计：无可行驶出边的断点组、被过滤的非掉头候选、100 m 内最近线路、桥/隧区段、弱连通分量。
+- 断点分类：红色 `filtered`（有被拒候选）、橙色 `nearby`（100 m 内有其它线路）、灰色 `isolated`（100 m 内没有其它线路）。接近掉头的候选不列为断点，因为应由换向处理。
+- `RailwayMap.vue` 使用 2D Canvas 绘制原始区段（普通/桥/隧分色）和断点；`Inspector.vue` 负责分省加载、筛选、详情、复制坐标/JSON 和导出。`加载邻省` 会把相邻省份加入同一 `RailNetwork`，本次会话内不卸载。
+- 数据读取通过 `RailwayRepository`/`RailNetwork` 构造器注入的 `JsonFetcher`，页面用 `../../data/` 解析嵌套路径。Vite 多页面入口使用 `dev/raliway-check/index.html`；`railway-check-html` 插件只在该页面移除 `vite-plugin-cesium` 注入的 Cesium CSS/JS 标签。
+- 检查页不是 Cesium 地形图，不显示真实卫星底图、隧道洞口或桥梁结构；断点是派生拓扑输出，不能直接当作原始数据错误。
+
 ## 5. GitHub Pages 构建与部署
 
 1. 仓库 GitHub Settings → Pages → Source 选择 **GitHub Actions**。
 2. 推送 `main` 或手动运行 `Deploy to GitHub Pages` workflow。
 3. workflow 使用 Node 22 和锁文件缓存，执行 `npm ci --no-audit --no-fund` 与 `npm run build`，上传 `dist`。
-4. `base: './'` 让应用可部署在 `/<仓库名>/`，`assets.ts` 通过 `document.baseURI + import.meta.env.BASE_URL` 解析数据地址。
+4. `base: './'` 让应用可部署在 `/<仓库名>/`，`assets.ts` 通过 `document.baseURI + import.meta.env.BASE_URL` 解析数据地址。检查页位于嵌套路径，使用注入的 `JsonFetcher` 以 `../../data/` 读取，不沿用主应用 BASE_URL。
 5. `vite-plugin-cesium` 负责 Cesium Workers/Assets/Widgets 等静态资源；不得只复制 JS 而漏掉这些文件。
 6. 自定义 Vite 插件仅复制 `stations.json`、`provinces_index.json`、`geojson/` 和数据说明，并生成 `.nojekyll`。
-7. 不启用历史路由，刷新不存在服务端路由回退问题。
+7. 不启用历史路由，刷新不存在服务端路由回退问题。`vite.config.ts` 使用多页面输入：主应用 `index.html` 和检查页 `dev/raliway-check/index.html`；`railway-check-html` 在 `order: post` 阶段移除注入检查页的 Cesium CSS/JS，检查页自身不依赖 Cesium。
 8. 已生成并保留 `package-lock.json`；Actions 使用 `npm ci` 和 setup-node 的 npm 缓存，依赖变化时须同步更新锁文件。
+9. 构建后必须直接检查 `dist/index.html` 仍包含 `cesium/Cesium.js`，`dist/dev/raliway-check/index.html` 不含 Cesium 标签且资源路径为 `../../assets/...`；再用静态服务器实际打开检查页。
 
 ## 6. Cesium ion Token
 
@@ -195,7 +223,11 @@ Token 集中在 `src/config.ts` 的 `APP_CONFIG.cesiumIonToken`，初始化时�
 | `MultiLineString` 含多个不连续 part | 每 part 独立成区段，不能只读第一段或全部拼接。 |
 | `bridge: 'F'` 在 JS 中仍是 truthy | 必须严格比较 `'T'`，不可 `Boolean(raw.bridge)`。 |
 | 经纬度固定差值不是全国统一米制容差 | 节点和吸附均用实际米制距离。 |
-| 二维相交不一定连通 | 只按端点位置连接，不把折线中间的几何交叉自动建为节点；桥隧/层级属性参与有向连接的保守筛选。 |
+| 二维相交不一定连通 | 只按端点位置连接，不把折线中间的几何交叉自动建为节点；仅几何交叉、没有共享端点的线不连接。 |
+| 共享端点上的桥隧/`layer` 标签不同 | 不能因此切断正线。原始坐标重合（<0.01 m）且转角≤35°时保留为 `uncertain`；桥隧直连、桥与桥不同层、层差 2–3 也按几何连续性推定。非共享端点继续保守筛选。 |
+| 检查页嵌套路径 | 不能用主应用 `dataUrl`（BASE_URL 相对检查页会解析错）；通过 `JsonFetcher` 用 `../../data/`。Cesium 插件会向所有 HTML 注入标签，检查页需在 post 阶段剔除。 |
+| 多页面构建 | `vite.config.ts` 必须同时列出主应用和 `dev/raliway-check/index.html`；只加 HTML 不加 rollup 输入不会产出检查页。 |
+| 倍速直接乘物理 `dt` | 会改变动力学积分和事件判定；应放大累加器并继续按 1/60 s 固定步长 tick，限制每帧最大步数，切速清空积压。 |
 | 同名线路不代表同一要素 | 去重使用 osm_id + layer，不按名称删除。 |
 | 车站和 OSM 线路无外键 | 每次选站动态求最近线段，失败要明示；不得虚构关联字段。 |
 | 无坐标车站 | 独立标记、只检索，不上图、不选为出生点。 |
@@ -236,9 +268,21 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - 使用同一个 Python 静态服务器直接托管 `dist/`，浏览器验证开始页、Cesium 初始化、新游戏面板、搜索“广州南”、选择 `IZQ 广州南` 并进入驾驶 HUD 均成功，浏览器控制台无错误。
 - 上述验证针对本地静态部署产物，不等同于已在远程 GitHub Pages 实际发布。
 
+### 2026-11-02 桥隧拓扑修正、倍速与检查页验证
+
+- `npm test`：12 个测试文件、63 项全部通过；新增 `railway-check.test.ts` 3 项、20× 时间推进 1 项、桥隧/层级共享端点 1 项及既有拓扑回归。
+- `npm run build`：`vue-tsc` 与 Vite 多页面构建通过；主页面仍注入 Cesium，检查页产物 `dist/dev/raliway-check/index.html` 不含 Cesium 标签，资源为 `../../assets/...`。
+- 开发服务器 + headless Chromium：检查页自动加载江苏，显示 9,839 区段、1,728 个断点组、280 条被过滤连接、桥 2,930 / 隧 76、弱分量 100、最大分量 9,470；打开红色断点详情、切换被过滤连接、加载 5 个省级数据集后断点 1,728 → 1,660、弱分量 100 → 91；控制台无应用错误。
+- 同一生产构建通过 Python 静态服务器实际打开检查页并加载成功；`dist/index.html` 仍包含 `cesium/Cesium.js`。
+- 主应用 + headless Chromium：南京南进入驾驶，HUD 显示 1×/5×/10×/20×，选择 20× 后运行时间按倍速推进；headless SwiftShader 有 WebGL 警告和黑屏，未作为视觉验收。
+- 江苏正式数据未修改；本轮只改派生拓扑、会话倍速、检查页和文档。
+
 ## 9. 当前已知边界（不是已完成能力）
 
-- 派生拓扑基于几何端点近似，不包含真实道岔联锁、信号、站场股道或调度。桥隧/层级冲突经过保守启发式筛选但仍不代表真实联锁；端点接入已有内点已识别；原始缺口或没有共享顶点的几何交叉不会自动补连，不能据此保证全国任意路线连续可达。
+- 派生拓扑基于几何端点近似，不包含真实道岔联锁、信号、站场股道或调度。2026-11-02 已修正“共享端点仅因桥隧/层级标签不同而切断”的误断，但标签相同或坐标重合仍不证明物理连通；原始缺口或没有共享顶点的几何交叉不会自动补连，不能据此保证全国任意路线连续可达。
+- 检查页是只读 2D Canvas 诊断，不是 Cesium 地形图：不显示卫星底图、桥梁结构或隧道洞口；断点分组、100 m 邻近线路和弱分量均为几何启发式。江苏加载后仍有 1,722 个几何孤立端点，未逐个核验；其中可能包含真实站场尽端、支线终点、>2 m 原始缺口或省界断点。
+- 检查页加载邻省后本次会话不卸载，后续分析会继续使用已加载数据；不加载邻省时省界断点可能误报。检查页未实现断点聚合/聚合展开，省域缩放下标记可能重叠；触摸缩放和超长省份性能未验收。
+- 20× 倍速下坡度采样、邻省预载和自动保存按真实时间节流，长距离高速行驶时地形坡度滞后；倍速不改变动力学模型和真实铁路纵断面边界。
 - 显式省份邻接表辅助预载，不代表真实跨省铁路路径；省界实际续接仍以原始共享位置为准。
 - 已加载省份会保留在当前会话内；`maxCachedProvinces` 参数尚预留，未实现内存压力下的自动卸载。
 - 地形高程不等于真实铁路纵断面，桥梁和隧道高程也未做专用模型。
@@ -258,8 +302,9 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 3. 修改物理时保持其不依赖 Cesium/Vue，并补 Vitest。
 4. 修改数据结构时更新存档版本及迁移/校验，不让错误导入覆盖有效存档。
 5. 修改部署配置后检查仓库子路径、中文 GeoJSON URL 和 Cesium 静态资源。
-6. 修改 UI 后实际测试：开始新游戏、车站出发、地图选点、牵引/制动/换向、分岔、保存恢复、导入导出。
-7. 完成后在下方更新日志追加日期、变更和验证结果；发现新限制同步更新第 9 节。
+6. 修改 UI 后实际测试：开始新游戏、车站出发、地图选点、牵引/制动/换向、分岔、保存恢复、导入导出；倍速改动需至少检查 1× 与 20× 的模拟时间推进。
+7. 修改拓扑或断点规则后，运行 `npx vite-node scripts/railway-diagnostics.ts <adcode>` 并打开 `/dev/raliway-check/` 对照红色/橙色断点和真实数据；修复必须区分“规则误断”和“原始 OSM 缺口”。
+8. 完成后在下方更新日志追加日期、变更和验证结果；发现新限制同步更新第 9 节。
 
 ## 11. 更新日志
 
@@ -363,3 +408,12 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - GitHub Pages 工作流的 push 触发分支增加 `drive`，使道岔专项分支可以通过同一 Actions 工作流构建并部署；`main` 触发保持不变。
 - 提交 `e34224f` 的 Actions run `41411284219` 中 build 与 deploy 均成功，但仓库 Pages 仍配置为 `build_type=legacy`、来源 `drive:/`；实际访问 `https://hurricanedd.github.io/China-Railway-Train-Sim/` 返回旧的开发入口 `/src/main.ts`，浏览器显示空白，不能视为部署验收通过。
 - 当前 GitHub 账号对仓库仅有 push 权限，切换 Pages 发布模式的 API 请求返回 404。需仓库管理员在 Settings → Pages → Build and deployment 将 Source 改为 **GitHub Actions**，随后重新运行 Deploy to GitHub Pages workflow，再检查线上首页和界面。
+
+### 2026-11-02 — 桥隧误断修复、5×/10×/20× 与线路检查页
+
+- 查明“桥隧处理”实际只是 OSM 标签：`bridge === 'T'` / `tunnel === 'T'`，不做结构、地形或几何分类；旧连接规则把 `layer` 差异也当作断线条件，共享端点仅因桥隧/层级标签不同即被隔离。江苏实测 1,108 个被拒属性候选全部位于完全重合端点，其中 812 个仅层差。
+- 修正 `connectionsAt`：共享端点（<0.01 m）且属性冲突转角≤35°时保留为 `uncertain` 可行驶候选；桥隧直连、桥与桥不同层、层差 2–3 均可连续；非共享端点仍保守。江苏有向无出边边界 2,616→1,735、带候选断点 894→13、属性冲突 1,108→0、弱分量 469→100、最大分量 3,535→9,470；南京周边多条正线恢复连续。剩余 1,722 个几何端点仍需人工核查。
+- 增加 1×/5×/10×/20× 模拟倍速：固定 1/60 s 物理步长不变，按真实帧放大累加器并限制每帧 300 步；切速清空积压。按键重复、坡度采样、邻省预载、自动保存按真实时间节流，新行程/恢复回到 1×。
+- 新增 `dev/raliway-check/` 分省只读检查页：普通/桥/隧分色，红色标出被过滤断点、橙色标近邻未接入、灰色标孤立端点；可加载邻省、查看来路/候选角度/间隙/OSM ID、复制坐标/JSON、导出本省报告。Vite 多页面构建，检查页不加载 Cesium；数据路径通过注入 `JsonFetcher` 解析，避免嵌套页面 BASE_URL 错误。
+- `npm test` 12 文件 63 项通过；`npm run build` 通过。开发服务器和静态 `dist` 均实际打开检查页；江苏加载 9,839 区段、1,728 个断点组、280 条被过滤连接；加载 5 省后断点 1,660、弱分量 91。主应用南京南进入驾驶并选中 20×，模拟时间按倍速推进；headless SwiftShader 的 WebGL 警告未作为视觉验收。
+- 正式 `data/` 未修改；未完成逐省人工核对、真实长途 20× 驾驶、真实触屏和 GitHub Pages 线上验收。详见 `docs/RAILWAY-TOPOLOGY.md`、`docs/DEVELOPMENT-STATE.md` 和 `dev/raliway-check/README.md`。

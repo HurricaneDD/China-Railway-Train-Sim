@@ -39,13 +39,36 @@ function railwayData(): Plugin {
   };
 }
 
+/** The standalone inspector does not import Cesium; remove injected tags under its nested URL. */
+function railwayCheckHtml(): Plugin {
+  return {
+    name: 'railway-check-html',
+    transformIndexHtml: {
+      order: 'post',
+      handler(html, context) {
+        const path = (context.filename || context.path || '').replace(/\\/g, '/');
+        if (!path.endsWith('dev/raliway-check/index.html')) return html;
+        return html
+          .replace(/\s*<link[^>]+cesium[^>]*>/gi, '')
+          .replace(/\s*<script[^>]+cesium[^>]*>\s*<\/script>/gi, '');
+      },
+    },
+  };
+}
+
 export default defineConfig({
   base: './',
   publicDir: false,
-  plugins: [vue(), cesium(), railwayData()],
+  plugins: [vue(), cesium(), railwayCheckHtml(), railwayData()],
   resolve: { alias: { '@': resolve(__dirname, 'src') } },
   build: {
     target: 'es2022',
     chunkSizeWarningLimit: 5000,
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        railwayCheck: resolve(__dirname, 'dev/raliway-check/index.html'),
+      },
+    },
   },
 });

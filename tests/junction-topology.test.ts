@@ -42,6 +42,22 @@ describe('有向道岔与路径预览', () => {
     expect(all.find(c => c.segmentId === '320000:2:0')).toMatchObject({ valid: false });
     expect(all.some(c => c.segmentId === '320000:3:0')).toBe(false);
   });
+  it('共享端点的层级变化、同层桥隧交界和桥隧直连均不切断正线', async () => {
+    const g = await network([
+      feature('ground', [[118, 32], [118.001, 32]]),
+      feature('viaduct2', [[118.001, 32], [118.002, 32]], { bridge: 'T', layer: 2 }),
+      feature('viaduct1', [[118.002, 32], [118.003, 32]], { bridge: 'T', layer: 1 }),
+      feature('tunnel', [[118.003, 32], [118.004, 32]], { tunnel: 'T', layer: -1 }),
+    ]);
+    const first = g.nextBoundary('320000:0:0', 0, 1)!;
+    const second = g.nextBoundary('320000:1:0', 0, 1)!;
+    const third = g.nextBoundary('320000:2:0', 0, 1)!;
+    expect(g.drivableExits('320000:0:0', first, 1).find(c => c.segmentId === '320000:1:0')).toMatchObject({ valid: true, confidence: 'uncertain' });
+    expect(g.drivableExits('320000:1:0', second, 1).find(c => c.segmentId === '320000:2:0')).toMatchObject({ valid: true, confidence: 'uncertain' });
+    expect(g.drivableExits('320000:2:0', third, 1).find(c => c.segmentId === '320000:3:0')).toMatchObject({ valid: true, confidence: 'uncertain' });
+    expect(g.drivableExits('320000:1:0', second, 1).find(c => c.segmentId === '320000:2:0')!.reason).toContain('层级变化');
+    expect(g.drivableExits('320000:2:0', third, 1).find(c => c.segmentId === '320000:3:0')!.reason).toContain('桥隧过渡');
+  });
   it('容差内但存在明显间隙的平行轨道不得自动接入', async () => {
     const g = await network([
       feature('a', [[118, 32], [118.001, 32]]),

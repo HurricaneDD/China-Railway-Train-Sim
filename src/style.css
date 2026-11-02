@@ -333,6 +333,13 @@ kbd { display: inline-block; min-width: 19px; padding: 2px 5px; border: 1px soli
 .journey-strip small { color: var(--muted); font-size: 10px; }
 .journey-strip strong { font-size: 12px; font-variant-numeric: tabular-nums; }
 .journey-practice { margin-left: auto; color: var(--accent); }
+.simulation-speed { pointer-events: auto; display: flex; flex-direction: column; gap: 4px; padding-left: 14px; border-left: 1px solid #ffffff24; }
+.simulation-speed small { color: var(--muted); font-size: 10px; }
+.simulation-speed > div { display: flex; gap: 3px; }
+.simulation-speed button { min-width: 40px; padding: 3px 6px; border: 1px solid #ffffff2b; color: #c5cbc1; background: #182017; font-size: 10px; }
+.simulation-speed button:hover { border-color: #9eab8d; }
+.simulation-speed button.active { border-color: var(--accent); color: var(--ink); background: var(--accent); }
+.simulation-speed button:focus-visible { outline-offset: 2px; }
 .driving-ui:not(.cab-view) .speed-cluster, .driving-ui:not(.cab-view) .telemetry { top: 150px; }
 .route-status { position: absolute; left: 50%; top: 143px; transform: translateX(-50%); max-width: 48vw; padding: 10px 16px; background: #d8ff62; color: #17200d; font-size: 12px; text-align: center; }
 .brake-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
@@ -358,6 +365,9 @@ kbd { display: inline-block; min-width: 19px; padding: 2px 5px; border: 1px soli
   .journey-strip { left: 10px; right: 10px; top: 68px; gap: 14px; padding: 8px; flex-wrap: wrap; }
   .journey-strip strong { font-size: 10px; }
   .journey-practice { display: none !important; }
+  .simulation-speed { margin-left: auto; padding-left: 8px; }
+  .simulation-speed small { font-size: 9px; }
+  .simulation-speed button { min-width: 34px; padding: 2px 4px; font-size: 9px; }
   .driving-ui:not(.cab-view) .speed-cluster, .driving-ui:not(.cab-view) .telemetry { top: 135px; }
   .route-status { top: 230px; max-width: 90vw; width: 90vw; }
   .map-select-banner { left: 10px; right: 10px; bottom: auto; top: 12px; max-width: calc(100vw - 20px); }

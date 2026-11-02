@@ -1,4 +1,4 @@
-import { APP_CONFIG } from '../config';
+import { APP_CONFIG, type SimulationSpeed } from '../config';
 import { RailwayRepository, type RailExit, type RailBoundary } from '../data/railway';
 import { StationRepository } from '../data/stations';
 import { neighboringProvinces } from '../data/province-neighbors';
@@ -19,6 +19,8 @@ export class GameSession {
   connectionWarning = '';
   running = false;
   paused = false;
+  /** Wall-clock multiplier for physics simulation; does not change dynamics or route identity. */
+  simulationSpeed: SimulationSpeed = 1;
   elapsed = 0;
   brakeHeld = false;
   parkingBrake = true;
@@ -71,6 +73,7 @@ export class GameSession {
     this.slopeGeneration++;
     this.clearControls();
     this.elapsed = 0;
+    this.simulationSpeed = 1;
     this.junction = undefined;
     this.connectionWarning = '';
     this.preferredNext = undefined;
@@ -104,6 +107,7 @@ export class GameSession {
     this.slopeGeneration++;
     this.clearControls();
     this.elapsed = save.elapsed;
+    this.simulationSpeed = 1;
     this.junction = undefined;
     this.connectionWarning = '';
     this.preferredNext = undefined;
@@ -148,6 +152,15 @@ export class GameSession {
     this.paused = value;
     this.clearControls();
     this.onUpdate?.();
+  }
+
+  setSimulationSpeed(value: number): boolean {
+    if (!(APP_CONFIG.simulation.speedOptions as readonly number[]).includes(value)) return false;
+    this.simulationSpeed = value as SimulationSpeed;
+    // Drop any stale accumulator so switching speed never injects a burst of physics steps.
+    this.accumulator = 0;
+    this.onUpdate?.();
+    return true;
   }
 
   toggleParkingBrake(): void {
@@ -257,11 +270,15 @@ export class GameSession {
       if (!this.running) return;
       const delta = Math.min(APP_CONFIG.simulation.maxFrameDelta, (time - this.previousTime) / 1000);
       this.previousTime = time;
-      this.accumulator += delta;
-      while (this.accumulator >= APP_CONFIG.simulation.fixedStep) {
+      this.accumulator += delta * this.simulationSpeed;
+      let steps = 0;
+      while (this.accumulator >= APP_CONFIG.simulation.fixedStep && steps < APP_CONFIG.simulation.maxStepsPerFrame) {
         this.tick(APP_CONFIG.simulation.fixedStep);
         this.accumulator -= APP_CONFIG.simulation.fixedStep;
+        steps++;
       }
+      // Never chase an unbounded backlog after a stall or a very slow frame.
+      if (steps >= APP_CONFIG.simulation.maxStepsPerFrame) this.accumulator = 0;
       this.uiAccumulator += delta;
       if (this.uiAccumulator >= 0.1) {
         this.onUpdate?.();
@@ -276,7 +293,9 @@ export class GameSession {
     if (this.paused || this.junction || this.loadingBorder || this.routeEnd || !this.position) return;
     this.elapsed += dt;
     this.repeatTimer += dt;
-    if (this.repeatTimer >= APP_CONFIG.train.keyRepeatMs / 1000) {
+    // Input repeat and background work stay at wall-clock cadence while physics is sped up.
+    const speed = this.simulationSpeed;
+    if (this.repeatTimer >= (APP_CONFIG.train.keyRepeatMs / 1000) * speed) {
       const direction = this.heldThrottle.has('up') ? 1 : this.heldThrottle.has('down') ? -1 : 0;
       if (direction) this.setThrottle(this.train.throttle + direction * APP_CONFIG.train.throttleStep);
       this.repeatTimer = 0;
@@ -287,15 +306,15 @@ export class GameSession {
     this.slopeTimer += dt;
     this.borderTimer += dt;
     this.autosaveTimer += dt;
-    if (this.slopeTimer >= 1.5) {
+    if (this.slopeTimer >= 1.5 * speed) {
       this.slopeTimer = 0;
       void this.refreshSlope();
     }
-    if (this.borderTimer >= 3) {
+    if (this.borderTimer >= 3 * speed) {
       this.borderTimer = 0;
       void this.loadNearbyProvinces();
     }
-    if (this.autosaveTimer >= APP_CONFIG.simulation.autosaveSeconds) {
+    if (this.autosaveTimer >= APP_CONFIG.simulation.autosaveSeconds * speed) {
       this.autosaveTimer = 0;
       this.onAutosave?.();
     }

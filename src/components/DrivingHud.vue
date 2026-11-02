@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { APP_CONFIG } from '../config';
 import type { GameSession } from '../core/session';
 import type { Reverser } from '../types';
 
 const props = defineProps<{ session: GameSession; updateKey: number; cameraRange: number; cameraMode: 'cab' | 'external' }>();
-const emit = defineEmits<{ menu: []; save: []; settings: []; reverser: [value: Reverser]; horn: [held: boolean]; sand: []; camera: [range: number]; view: []; pause: []; help: []; parking: []; retry: []; }>();
+const emit = defineEmits<{ menu: []; save: []; settings: []; reverser: [value: Reverser]; horn: [held: boolean]; sand: []; camera: [range: number]; view: []; pause: []; help: []; parking: []; retry: []; speed: [value: number]; }>();
 void props.updateKey;
+const speedOptions = APP_CONFIG.simulation.speedOptions;
 
 function lineName(): string {
   if (!props.session.position) return '未定位';
@@ -47,6 +49,12 @@ function direction(value: Reverser): void {
       <span><small>运行时间</small><strong>{{ Math.floor(session.elapsed / 60) }}:{{ String(Math.floor(session.elapsed % 60)).padStart(2, '0') }}</strong></span>
       <span v-if="session.nearestStation"><small>邻近车站 · 直线</small><strong>{{ session.nearestStation.name }} · {{ (session.nearestStation.distance / 1000).toFixed(1) }} km</strong></span>
       <span class="journey-practice"><small>自由驾驶练习</small><strong>{{ session.practiceComplete ? '✓ 已完成 1 km 后停稳' : (session.position?.travelled ?? 0) >= 1000 ? '已满 1 km · 尝试停稳' : '行驶 1 km 后停稳' }}</strong></span>
+      <div class="simulation-speed" role="group" aria-label="模拟速度">
+        <small>模拟速度</small>
+        <div>
+          <button v-for="speed in speedOptions" :key="speed" :class="{ active: session.simulationSpeed === speed }" :aria-pressed="session.simulationSpeed === speed" :title="`模拟 ${speed} 倍速`" @click="$emit('speed', speed)">{{ speed }}×</button>
+        </div>
+      </div>
     </section>
     <div v-if="session.loadingBorder || session.routeEnd" class="route-status" role="status">
       {{ session.loadingBorder ? '正在检查相邻省份线路，已暂停推进…' : '前方线路中断或连接未确认 · 可换向后退或返回选站' }}

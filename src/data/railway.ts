@@ -39,6 +39,9 @@ interface RawProvince {
   features: RawFeature[];
 }
 
+/** Injectable so the development inspector can resolve nested-page data paths in dev and build. */
+export type JsonFetcher = <T>(path: string) => Promise<T>;
+
 // Alias lookups keep existing V1 save IDs valid without rendering duplicate geometry.
 class SegmentMap extends Map<string, RailSegment> {
   private aliases = new Map<string, string>();
@@ -70,9 +73,11 @@ export class RailNetwork {
   private boundaries = new Map<string, RailBoundary[]>();
   private nodeExits = new Map<string, RailExit[]>();
 
+  constructor(private readonly loadJson: JsonFetcher = fetchJson) {}
+
   async loadProvince(province: ProvinceInfo): Promise<{ segments: number; nodes: number }> {
     if (this.loadedProvinces.has(province.adcode)) return { segments: this.segments.size, nodes: this.nodes.size };
-    const data = await fetchJson<RawProvince>(province.file);
+    const data = await this.loadJson<RawProvince>(province.file);
     if (data.type !== 'FeatureCollection' || !Array.isArray(data.features)) throw new Error(`${province.province}线路数据格式不正确`);
     data.features.forEach((feature, featureIndex) => {
       const properties = this.readProperties(feature.properties, province.province);
@@ -159,21 +164,29 @@ export class RailNetwork {
       // A nearby endpoint is not proof of an attachment to an existing interior vertex.
       const interiorGapUncertain = incoming.id !== exit.segmentId && interior && gap > APP_CONFIG.simulation.junctionInteriorMaxGap;
       const a = incoming.properties, b = next.properties;
-      const conflict = a.layer !== b.layer || a.bridge !== b.bridge || a.tunnel !== b.tunnel;
-      const plausibleTransition = gap <= APP_CONFIG.simulation.junctionTransitionMaxGap &&
+      const attributeConflict = a.layer !== b.layer || a.bridge !== b.bridge || a.tunnel !== b.tunnel;
+      const bridgeTunnelChange = a.bridge !== b.bridge || a.tunnel !== b.tunnel;
+      // Exact OSM shared vertices are evidence of a common node. Bridge/tunnel/layer tags describe
+      // the way, not a second connection test, so a ground-to-bridge or layer change at the same
+      // coordinate must not cut the main line. Keep the looser tolerance rules for non-exact gaps.
+      const exactSharedVertex = gap < APP_CONFIG.simulation.junctionExactMaxGap;
+      const exactAttributeTransition = exactSharedVertex && Math.abs(angle) <= APP_CONFIG.simulation.junctionTransitionMaxTurnDegrees;
+      const plausibleTransition = !exactSharedVertex && gap <= APP_CONFIG.simulation.junctionTransitionMaxGap &&
         Math.abs(angle) <= APP_CONFIG.simulation.junctionTransitionMaxTurnDegrees &&
         !(a.bridge && b.tunnel) && !(a.tunnel && b.bridge) && Math.abs(a.layer - b.layer) <= 1 &&
-        (a.bridge !== b.bridge || a.tunnel !== b.tunnel);
-      let reason = gap < 0.01 ? '原始坐标重合，方向连续性推定' : '距离容差内的派生连接';
+        bridgeTunnelChange;
+      let reason = exactSharedVertex ? '原始坐标重合，方向连续性推定' : '距离容差内的派生连接';
       if (incomingLength < 0.1 || outgoingLength < 0.1) reason = '切线长度不足';
       else if (gap > APP_CONFIG.simulation.junctionTransitionMaxGap) reason = '端点存在间隙，无法确认物理连接';
       else if (interiorGapUncertain) reason = '内部顶点与外部端点未重合，连接未确认';
       else if (Math.abs(angle) >= APP_CONFIG.simulation.junctionMaxTurnDegrees) reason = '接近掉头，须停车换向';
-      else if (conflict && !plausibleTransition) reason = '层级或桥隧属性冲突，连接未确认';
-      else if (conflict) reason = '重合且走向连续的桥隧过渡，仍需核验';
+      else if (attributeConflict && exactAttributeTransition) {
+        reason = bridgeTunnelChange ? '共享端点的桥隧过渡，按几何连续性推定' : '共享端点的层级变化，按几何连续性推定';
+      } else if (attributeConflict && !plausibleTransition) reason = '层级或桥隧属性冲突，连接未确认';
+      else if (attributeConflict) reason = '重合且走向连续的桥隧过渡，仍需核验';
       const valid = incomingLength >= 0.1 && outgoingLength >= 0.1 && gap <= APP_CONFIG.simulation.junctionTransitionMaxGap && !interiorGapUncertain &&
-        Math.abs(angle) < APP_CONFIG.simulation.junctionMaxTurnDegrees && (!conflict || plausibleTransition);
-      return { ...exit, angle, gap, valid, reason, confidence: conflict || gap >= 0.01 ? 'uncertain' as const : 'derived' as const };
+        Math.abs(angle) < APP_CONFIG.simulation.junctionMaxTurnDegrees && (!attributeConflict || exactAttributeTransition || plausibleTransition);
+      return { ...exit, angle, gap, valid, reason, confidence: attributeConflict || gap >= APP_CONFIG.simulation.junctionExactMaxGap ? 'uncertain' as const : 'derived' as const };
     }).sort((a, b) => a.angle - b.angle || a.key.localeCompare(b.key));
   }
 
@@ -380,13 +393,17 @@ export class RailNetwork {
 }
 
 export class RailwayRepository {
-  readonly network = new RailNetwork();
+  readonly network: RailNetwork;
   provinces: ProvinceInfo[] = [];
   private loading = new Map<string, Promise<unknown>>();
 
+  constructor(private readonly loadJson: JsonFetcher = fetchJson) {
+    this.network = new RailNetwork(loadJson);
+  }
+
   async loadIndex(): Promise<void> {
     if (this.provinces.length) return;
-    const data = await fetchJson<ProvinceIndex>('provinces_index.json');
+    const data = await this.loadJson<ProvinceIndex>('provinces_index.json');
     if (data.type !== 'province_index' || !Array.isArray(data.provinces)) throw new Error('分省线路索引格式不正确');
     this.provinces = data.provinces;
   }

@@ -389,7 +389,7 @@ async function retryData(): Promise<void> {
       <NewGamePanel v-if="!selectingMap" :stations="session.stations" :provinces="session.railway.provinces" :selected-province="selectedProvince" :busy="busy" @close="screen = 'menu'" @province="selectProvince" @station="startStation" @location="enableMapSelection" />
       <div v-if="selectingMap" class="map-select-banner"><span class="pulse" />地图选点已启用 · 点击铁路附近位置<button @click="selectingMap = false; map?.setPicking()">返回选站</button></div>
     </div>
-    <DrivingHud v-else :session="session" :update-key="updateKey" :camera-range="settings.cameraRange" :camera-mode="cameraMode" @view="toggleCamera" @pause="userPaused = !userPaused" @help="showHelp = true" @parking="session.toggleParkingBrake()" @retry="session.retryBorder()" @menu="returnMenu" @save="quickSave" @settings="openOverlay('settings')" @reverser="changeReverser" @horn="(held) => held ? horn.start() : horn.stop()" @sand="triggerSand" @camera="(range) => { map?.setCameraRange(range); settings.cameraRange = Math.max(35, Math.min(900, range)); }" />
+    <DrivingHud v-else :session="session" :update-key="updateKey" :camera-range="settings.cameraRange" :camera-mode="cameraMode" @view="toggleCamera" @pause="userPaused = !userPaused" @help="showHelp = true" @parking="session.toggleParkingBrake()" @retry="session.retryBorder()" @menu="returnMenu" @save="quickSave" @settings="openOverlay('settings')" @reverser="changeReverser" @horn="(held) => held ? horn.start() : horn.stop()" @sand="triggerSand" @camera="(range) => { map?.setCameraRange(range); settings.cameraRange = Math.max(35, Math.min(900, range)); }" @speed="session.setSimulationSpeed($event)" />
     <JunctionDialog v-if="session.junction && !showHelp && !userPaused && !overlay" :junction="session.junction" @choose="(id) => session.chooseJunction(id)" />
     <div v-if="screen === 'driving' && showHelp" class="modal-backdrop">
       <section class="panel help-panel" role="dialog" aria-modal="true" aria-labelledby="help-title">
@@ -401,7 +401,7 @@ async function retryData(): Promise<void> {
           <li><b>02 · 滑行与停车</b><span>Ctrl 降低牵引。按住空格约 4 秒施加全部制动，松开后约 4 秒缓解；停稳后可启用驻车。</span></li>
           <li><b>03 · 选择方向</b><span>分岔处会暂停，选择后继续。倒车需先停稳；P / Esc 随时暂停。</span></li>
         </ol>
-        <p class="fine-print">可选练习：累计行驶 1 km 后停稳。自由驾驶不受练习限制；邻近车站距离为直线距离。</p>
+        <p class="fine-print">可选练习：累计行驶 1 km 后停稳。自由驾驶不受练习限制；邻近车站距离为直线距离。人工检查线路时可使用 5× / 10× / 20× 模拟速度，遇到分岔或线路中断仍会自动暂停。</p>
         <button class="button button-primary full-width" @click="showHelp = false">进入驾驶</button>
       </section>
     </div>

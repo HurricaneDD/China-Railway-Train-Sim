@@ -41,11 +41,14 @@ export const APP_CONFIG = {
   simulation: {
     fixedStep: 1 / 60,
     maxFrameDelta: 0.1,
+    speedOptions: [1, 5, 10, 20],
+    maxStepsPerFrame: 300,
     junctionPreviewDistance: 120,
     junctionStopDistance: 35,
     junctionMaxTurnDegrees: 150,
     junctionTransitionMaxTurnDegrees: 35,
     junctionTransitionMaxGap: 0.25,
+    junctionExactMaxGap: 0.01,
     junctionInteriorMaxGap: 0.01,
     junctionPathPreviewMeters: 2000,
     junctionPathMaxBoundaries: 80,
@@ -65,6 +68,8 @@ export const APP_CONFIG = {
     smoothing: 5,
   },
 } as const;
+
+export type SimulationSpeed = (typeof APP_CONFIG.simulation.speedOptions)[number];
 
 export interface GameSettings {
   sound: boolean;
