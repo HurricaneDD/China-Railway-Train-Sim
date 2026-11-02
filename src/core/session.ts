@@ -1,6 +1,7 @@
 import { APP_CONFIG } from '../config';
-import { RailwayRepository } from '../data/railway';
+import { RailwayRepository, type RailExit, type RailBoundary } from '../data/railway';
 import { StationRepository } from '../data/stations';
+import { neighboringProvinces } from '../data/province-neighbors';
 import type { GameSave, JunctionOption, JunctionRequest, LonLat, Reverser, RoutePoint, SavePosition, SnapResult, TrainState } from '../types';
 import { bearing, compassDirection, distance, pointAt } from '../utils/geo';
 import { initialTrainState, stepDynamics } from './dynamics';
@@ -19,6 +20,16 @@ export class GameSession {
   paused = false;
   elapsed = 0;
   brakeHeld = false;
+  parkingBrake = true;
+  routeEnd = false;
+  loadingBorder = false;
+  practiceComplete = false;
+  private routeCoordinate = 0;
+  private lastHistoryExtension = -Infinity;
+  private slopeGeneration = 0;
+  private borderLoading?: Promise<void>;
+  private tripGeneration = 0;
+  private lastBorderCheck?: LonLat;
   onUpdate?: () => void;
   onAutosave?: () => void;
   onError?: (message: string) => void;
@@ -42,8 +53,22 @@ export class GameSession {
     await this.railway.load(province);
     const snapped = this.railway.network.nearest(point, maxDistance);
     if (!snapped) throw new Error(`附近 ${Math.round(maxDistance)} 米内没有可用国铁线路，请重新选择`);
+    province = this.railway.network.segments.get(snapped.segmentId)!.properties.province;
     this.position = { province, segmentId: snapped.segmentId, offset: snapped.offset, direction: 1, travelled: 0 };
     this.train = initialTrainState();
+    this.train.brakeCommand = this.train.brakeActual = 100;
+    this.train.brakePipe = 430;
+    this.parkingBrake = true;
+    this.routeCoordinate = 0;
+    this.routeEnd = false;
+    this.practiceComplete = false;
+    this.tripGeneration++;
+    this.loadingBorder = false;
+    this.borderLoading = undefined;
+    this.lastBorderCheck = undefined;
+    this.lastHistoryExtension = -Infinity;
+    this.slopeGeneration++;
+    this.clearControls();
     this.elapsed = 0;
     this.junction = undefined;
     this.preferredNext = undefined;
@@ -59,16 +84,29 @@ export class GameSession {
 
   async restore(save: GameSave): Promise<void> {
     await this.railway.load(save.position.province);
+    const sourceProvince = this.railway.provinces.find(province => province.adcode === save.position.segmentId.split(':')[0]);
+    if (sourceProvince) await this.railway.load(sourceProvince.province);
     const segment = this.railway.network.segments.get(save.position.segmentId);
     if (!segment) throw new Error('存档中的铁路区段不存在，可能线路数据已更新');
     this.position = { ...save.position, offset: Math.max(0, Math.min(segment.length, save.position.offset)) };
     this.train = { ...initialTrainState(), ...save.train };
+    this.parkingBrake = Math.abs(this.train.velocity) < 0.001 && this.train.brakeActual >= 99;
+    this.routeCoordinate = save.position.travelled;
+    this.routeEnd = false;
+    this.practiceComplete = false;
+    this.tripGeneration++;
+    this.loadingBorder = false;
+    this.borderLoading = undefined;
+    this.lastBorderCheck = undefined;
+    this.lastHistoryExtension = -Infinity;
+    this.slopeGeneration++;
+    this.clearControls();
     this.elapsed = save.elapsed;
     this.junction = undefined;
     this.preferredNext = undefined;
     this.running = true;
     this.paused = false;
-    this.history = save.routeHistory.filter((point) => point.travelled <= this.position!.travelled).map((point) => ({ ...point })).sort((a, b) => a.travelled - b.travelled);
+    this.history = save.routeHistory.map((point) => ({ ...point })).sort((a, b) => a.travelled - b.travelled);
     this.recordRoutePoint();
     this.startLoop();
     void this.refreshSlope();
@@ -86,7 +124,7 @@ export class GameSession {
       position: { ...this.position },
       train: { ...this.train },
       elapsed: this.elapsed,
-      routeHistory: this.history.map((point) => ({ ...point })),
+      routeHistory: this.historyWithCurrent().map((point) => ({ ...point, travelled: point.travelled + this.position!.travelled - this.routeCoordinate })),
       consist: APP_CONFIG.train.cars,
     };
   }
@@ -95,6 +133,40 @@ export class GameSession {
     const save = this.createSave(name);
     await saveStore.put(save);
     return save;
+  }
+
+  clearControls(): void {
+    this.heldThrottle.clear();
+    this.brakeHeld = false;
+    this.repeatTimer = 0;
+  }
+
+  setPaused(value: boolean): void {
+    this.paused = value;
+    this.clearControls();
+    this.onUpdate?.();
+  }
+
+  toggleParkingBrake(): void {
+    this.parkingBrake = !this.parkingBrake;
+    if (this.parkingBrake) this.setThrottle(0);
+    this.onUpdate?.();
+  }
+
+  get frontDistance(): number {
+    if (!this.position) return 0;
+    const segment = this.railway.network.segments.get(this.position.segmentId);
+    if (!segment) return 0;
+    const sign = Math.sign(this.train.velocity) || this.train.reverser || 1;
+    return sign * this.position.direction > 0 ? segment.length - this.position.offset : this.position.offset;
+  }
+
+  get nearestStation(): { name: string; distance: number } | undefined {
+    const point = this.currentPoint();
+    if (!point) return;
+    const station = this.stations.nearest(point);
+    if (!station) return;
+    return { name: station.name, distance: distance(point, { lon: station.longitude, lat: station.latitude }) };
   }
 
   setThrottle(value: number): void {
@@ -111,7 +183,9 @@ export class GameSession {
     this.train.reverser = value;
     this.train.velocity = 0;
     this.preferredNext = undefined;
-    void this.refreshSlope();
+    this.routeEnd = false;
+    this.junction = undefined;
+    this.onUpdate?.();
     return true;
   }
 
@@ -126,19 +200,27 @@ export class GameSession {
     this.preferredNext = segmentId;
     this.junction = undefined;
     this.junctionDistance = Infinity;
+    this.onUpdate?.();
   }
 
   currentPoint(): RoutePoint | undefined {
-    return this.history[this.history.length - 1];
+    if (!this.position) return;
+    const segment = this.railway.network.segments.get(this.position.segmentId);
+    if (!segment) return;
+    const point = pointAt(segment, this.position.offset);
+    return { ...point, heading: (point.heading + (this.position.direction < 0 ? 180 : 0)) % 360,
+      height: this.elevation.height(point), travelled: this.routeCoordinate };
   }
 
   consistPoints(): RoutePoint[] {
-    if (!this.position || !this.history.length) return [];
+    if (!this.position || !this.currentPoint()) return [];
     const points = [this.currentPoint()!];
     let trailingDistance = APP_CONFIG.train.locomotive.length / 2;
     for (const car of APP_CONFIG.train.cars) {
       trailingDistance += APP_CONFIG.train.couplingGap + car.length / 2;
-      points.push(this.historyPoint(this.position.travelled - trailingDistance));
+      const point = this.historyPoint(this.routeCoordinate - trailingDistance);
+      if (!point) break;
+      points.push(point);
       trailingDistance += car.length / 2;
     }
     return points;
@@ -146,9 +228,10 @@ export class GameSession {
 
   stop(): void {
     this.running = false;
+    this.tripGeneration++;
+    this.loadingBorder = false;
     cancelAnimationFrame(this.animationFrame);
-    this.heldThrottle.clear();
-    this.brakeHeld = false;
+    this.clearControls();
   }
 
   private startLoop(): void {
@@ -175,7 +258,7 @@ export class GameSession {
   }
 
   private tick(dt: number): void {
-    if (this.paused || this.junction || !this.position) return;
+    if (this.paused || this.junction || this.loadingBorder || this.routeEnd || !this.position) return;
     this.elapsed += dt;
     this.repeatTimer += dt;
     if (this.repeatTimer >= APP_CONFIG.train.keyRepeatMs / 1000) {
@@ -183,8 +266,9 @@ export class GameSession {
       if (direction) this.setThrottle(this.train.throttle + direction * APP_CONFIG.train.throttleStep);
       this.repeatTimer = 0;
     }
-    stepDynamics(this.train, dt, this.train.slope, this.brakeHeld);
+    stepDynamics(this.train, dt, this.train.slope, this.brakeHeld || this.parkingBrake);
     this.advance(this.train.velocity * dt);
+    if (this.position.travelled >= 1000 && Math.abs(this.train.velocity) * 3.6 < 0.5) this.practiceComplete = true;
     this.slopeTimer += dt;
     this.borderTimer += dt;
     this.autosaveTimer += dt;
@@ -192,7 +276,7 @@ export class GameSession {
       this.slopeTimer = 0;
       void this.refreshSlope();
     }
-    if (this.borderTimer >= 15) {
+    if (this.borderTimer >= 3) {
       this.borderTimer = 0;
       void this.loadNearbyProvinces();
     }
@@ -204,38 +288,57 @@ export class GameSession {
 
   private advance(signedDistance: number): void {
     if (!this.position || Math.abs(signedDistance) < 0.000001) return;
+    this.routeEnd = false;
     let remaining = signedDistance;
+    const movementSign = Math.sign(signedDistance);
     let guard = 0;
-    while (Math.abs(remaining) > 0.000001 && guard++ < 8 && this.position) {
+    while (Math.abs(remaining) > 0.000001 && guard++ < 128 && this.position) {
       const segment = this.railway.network.segments.get(this.position.segmentId);
-      if (!segment) {
-        this.train.velocity = 0;
-        return;
-      }
-      const coordinateDirection = Math.sign(remaining) * this.position.direction;
-      const atEnd = coordinateDirection > 0;
-      const available = atEnd ? segment.length - this.position.offset : this.position.offset;
-      const movement = Math.sign(remaining) * Math.min(Math.abs(remaining), available);
+      if (!segment) { this.train.velocity = 0; return; }
+      const coordinateDirection = movementSign * this.position.direction;
+      const boundary = this.railway.network.nextBoundary(segment.id, this.position.offset, coordinateDirection);
+      if (!boundary) { this.train.velocity = 0; this.routeEnd = true; break; }
+      const available = Math.abs(boundary.offset - this.position.offset);
+      const movement = movementSign * Math.min(Math.abs(remaining), available);
       this.position.offset += movement * this.position.direction;
       this.position.travelled += Math.abs(movement);
+      this.routeCoordinate += movement;
       remaining -= movement;
-      if (Math.abs(remaining) <= 0.000001) break;
-      const connections = this.railway.network.connections(segment.id, atEnd);
-      const next = this.preferredNext ? connections.find((item) => item.id === this.preferredNext) : connections.length === 1 ? connections[0] : undefined;
+      if (Math.abs(movement) < available - 0.000001) break;
+      const exits = this.railway.network.exitsAt(segment.id, boundary, coordinateDirection);
+      const remembered = this.knownConnection(exits, movementSign);
+      const next = this.preferredNext ? exits.find(exit => exit.key === this.preferredNext) : exits.length === 1 ? exits[0] : movementSign < 0 ? remembered : undefined;
+      this.recordRoutePoint(true);
       if (!next) {
-        this.train.velocity = 0;
-        if (connections.length > 1) this.openJunction(segment.id, atEnd);
+        if (exits.length > 1) this.openJunction(segment.id, boundary, coordinateDirection);
+        else {
+          this.train.velocity = 0;
+          this.train.throttle = 0;
+          this.routeEnd = true;
+          void this.retryBorder();
+        }
         break;
       }
-      const nodeId = atEnd ? segment.endNode : segment.startNode;
-      const entersAtStart = next.startNode === nodeId;
-      this.position.segmentId = next.id;
-      this.position.direction = entersAtStart ? 1 : -1;
-      this.position.offset = entersAtStart ? 0 : next.length;
-      this.position.province = next.properties.province;
+      // A newly selected branch replaces only the unoccupied direction of the old corridor.
+      if (this.preferredNext && (!remembered || remembered.key !== next.key)) {
+        this.history = this.history.filter(point => movementSign > 0 ? point.travelled <= this.routeCoordinate : point.travelled >= this.routeCoordinate);
+        this.lastHistoryExtension = -Infinity;
+      }
+      const nextSegment = this.railway.network.segments.get(next.segmentId)!;
+      this.position.segmentId = nextSegment.id;
+      this.position.direction = (next.direction * movementSign) as 1 | -1;
+      this.position.offset = next.offset;
+      this.position.province = nextSegment.properties.province;
       this.preferredNext = undefined;
     }
     this.recordRoutePoint();
+    if (guard >= 128 && Math.abs(remaining) > 0.000001) {
+      this.train.velocity = 0;
+      this.setPaused(true);
+      this.onError?.('区段切换过于密集，已暂停。可换向或重新选择出发位置。');
+    }
+    if (this.routeCoordinate - (this.history[0]?.travelled ?? this.routeCoordinate) < 150 &&
+        Math.abs(this.routeCoordinate - this.lastHistoryExtension) > 10) this.extendHistory();
     this.checkJunction();
   }
 
@@ -243,115 +346,207 @@ export class GameSession {
     if (!this.position || this.junction) return;
     const segment = this.railway.network.segments.get(this.position.segmentId);
     if (!segment) return;
-    const travelSign = Math.sign(this.train.velocity) || this.train.reverser;
-    if (!travelSign) return;
-    const atEnd = travelSign * this.position.direction > 0;
-    const remaining = atEnd ? segment.length - this.position.offset : this.position.offset;
-    const connections = this.railway.network.connections(segment.id, atEnd);
-    this.junctionDistance = connections.length > 1 && remaining < APP_CONFIG.simulation.junctionPreviewDistance ? remaining : Infinity;
-    if (connections.length > 1 && remaining <= APP_CONFIG.simulation.junctionStopDistance && !this.preferredNext) this.openJunction(segment.id, atEnd);
+    const sign = Math.sign(this.train.velocity) || this.train.reverser;
+    if (!sign) return;
+    const direction = sign * this.position.direction;
+    const boundary = this.railway.network.nextBoundary(segment.id, this.position.offset, direction);
+    if (!boundary) return;
+    const remaining = Math.abs(boundary.offset - this.position.offset);
+    const exits = this.railway.network.exitsAt(segment.id, boundary, direction);
+    this.junctionDistance = exits.length > 1 && remaining < APP_CONFIG.simulation.junctionPreviewDistance ? remaining : Infinity;
+    if (exits.length > 1 && remaining <= APP_CONFIG.simulation.junctionStopDistance && !this.preferredNext && !(sign < 0 && this.knownConnection(exits, sign, remaining))) {
+      this.openJunction(segment.id, boundary, direction);
+    }
   }
 
-  private openJunction(segmentId: string, atEnd: boolean): void {
-    const segment = this.railway.network.segments.get(segmentId)!;
-    const node = this.railway.network.nodeFor(segmentId, atEnd)!;
-    const options = this.railway.network.connections(segmentId, atEnd).map((next): JunctionOption => {
-      const fromStart = next.startNode === node.id;
-      const a = pointAt(next, fromStart ? 0 : next.length);
-      const b = pointAt(next, fromStart ? Math.min(300, next.length) : Math.max(0, next.length - 300));
+  private openJunction(segmentId: string, boundary: RailBoundary, direction: number): void {
+    const options = this.railway.network.exitsAt(segmentId, boundary, direction).map((exit): JunctionOption => {
+      const next = this.railway.network.segments.get(exit.segmentId)!;
+      const a = pointAt(next, exit.offset);
+      const b = pointAt(next, exit.offset + exit.direction * Math.min(300, exit.direction > 0 ? next.length - exit.offset : exit.offset));
       const degrees = bearing(a, b);
       const station = this.stations.nearest(b, next.properties.province);
       const nextStation = station && distance(b, { lon: station.longitude, lat: station.latitude }) <= 8000 ? station.name : '暂无车站信息';
-      return { segmentId: next.id, name: next.properties.name, bearing: degrees, direction: compassDirection(degrees), nextStation };
+      return { segmentId: exit.key, name: next.properties.name, bearing: degrees, direction: compassDirection(degrees), nextStation };
     });
-    this.junction = { nodeId: node.id, atSegmentEnd: atEnd, options };
+    this.junction = { nodeId: boundary.nodeId, atSegmentEnd: direction > 0, options };
     this.onUpdate?.();
   }
 
+  private knownConnection(exits: RailExit[], sign: number, boundaryDistance = 0): RailExit | undefined {
+    if (!this.position || exits.length < 2) return;
+    const ranked = exits.map(exit => {
+      const segment = this.railway.network.segments.get(exit.segmentId)!;
+      const delta = Math.min(3, (exit.direction > 0 ? segment.length - exit.offset : exit.offset) / 2);
+      const known = this.historyPoint(this.routeCoordinate + sign * (boundaryDistance + delta));
+      return { exit, distance: known ? distance(known, pointAt(segment, exit.offset + exit.direction * delta)) : Infinity };
+    }).filter(item => item.distance < 1).sort((a, b) => a.distance - b.distance);
+    if (ranked.length === 1 || (ranked.length > 1 && ranked[1].distance - ranked[0].distance > 0.2)) return ranked[0].exit;
+  }
+
   private initializeHistory(): void {
+    this.history = [];
+    this.recordRoutePoint(true);
+    this.extendHistory();
+  }
+
+  private extendHistory(): void {
     if (!this.position) return;
+    this.lastHistoryExtension = this.routeCoordinate;
     let segment = this.railway.network.segments.get(this.position.segmentId)!;
-    let direction = this.position.direction * (this.train.reverser || 1);
+    let direction = this.position.direction;
     let offset = this.position.offset;
-    const reversed: RoutePoint[] = [];
-    for (let back = 0; back <= APP_CONFIG.simulation.routeHistoryLength; back += 5) {
-      let desired = offset - (back === 0 ? 0 : 5) * direction;
-      let guard = 0;
-      while ((desired < 0 || desired > segment.length) && guard++ < 8) {
-        const overflow = desired < 0 ? -desired : desired - segment.length;
-        const atEnd = direction < 0;
-        const node = this.railway.network.nodeFor(segment.id, atEnd);
-        const previous = this.railway.network.connections(segment.id, atEnd);
-        if (!node || previous.length !== 1) {
-          this.history = reversed.reverse();
-          return;
-        }
-        const next = previous[0];
-        direction = next.endNode === node.id ? 1 : -1;
-        offset = direction === 1 ? next.length : 0;
-        segment = next;
-        desired = offset - overflow * direction;
-      }
-      if (desired < 0 || desired > segment.length) break;
-      offset = desired;
+    let coordinate = this.routeCoordinate;
+    const oldest = this.history[0]?.travelled ?? coordinate;
+    const points: RoutePoint[] = [];
+    let distanceLeft = APP_CONFIG.simulation.routeHistoryLength;
+    let guard = 0;
+    while (distanceLeft > 0 && guard++ < 5000) {
       const point = pointAt(segment, offset);
-      reversed.push({ ...point, heading: (point.heading + (direction < 0 ? 180 : 0)) % 360, height: this.elevation.height(point), travelled: this.position.travelled - back });
+      if (coordinate < oldest) points.push({ ...point, heading: (point.heading + (direction < 0 ? 180 : 0)) % 360,
+        height: this.elevation.height(point), travelled: coordinate });
+      const boundary = this.railway.network.nextBoundary(segment.id, offset, -direction);
+      if (!boundary) break;
+      const available = Math.abs(offset - boundary.offset);
+      const step = Math.min(5, available, distanceLeft);
+      offset -= step * direction;
+      coordinate -= step;
+      distanceLeft -= step;
+      if (available > step + 0.000001) continue;
+      const choices = this.railway.network.exitsAt(segment.id, boundary, -direction);
+      const known = this.historyPoint(coordinate - 2);
+      const matches = known ? choices.filter(exit => {
+        const next = this.railway.network.segments.get(exit.segmentId)!;
+        return distance(pointAt(next, exit.offset + exit.direction * Math.min(2, next.length / 2)), known) < 0.5;
+      }) : [];
+      // For initial tail placement, continuity within the same original polyline is unambiguous.
+      const continuation = choices.find(exit => exit.segmentId === segment.id);
+      const next = matches.length === 1 ? matches[0] : continuation ?? (choices.length === 1 ? choices[0] : undefined);
+      if (!next) break;
+      const corner = pointAt(segment, offset);
+      if (coordinate < oldest) points.push({ ...corner, heading: (corner.heading + (direction < 0 ? 180 : 0)) % 360,
+        height: this.elevation.height(corner), travelled: coordinate });
+      direction = -next.direction as 1 | -1;
+      segment = this.railway.network.segments.get(next.segmentId)!;
+      offset = next.offset;
     }
-    this.history = reversed.reverse();
+    this.history = [...points.reverse(), ...this.history].sort((a, b) => a.travelled - b.travelled)
+      .filter((point, index, all) => index === 0 || point.travelled > all[index - 1].travelled + 0.000001);
   }
 
-  private recordRoutePoint(): void {
-    if (!this.position) return;
-    const segment = this.railway.network.segments.get(this.position.segmentId)!;
-    const point = pointAt(segment, this.position.offset);
-    const orientation = this.position.direction * (this.train.reverser || 1);
-    const routePoint: RoutePoint = { ...point, heading: (point.heading + (orientation < 0 ? 180 : 0)) % 360, height: this.elevation.height(point), travelled: this.position.travelled };
-    const last = this.history[this.history.length - 1];
-    if (!last || distance(last, routePoint) >= 1.5) this.history.push(routePoint);
-    else this.history[this.history.length - 1] = routePoint;
-    const earliest = this.position.travelled - APP_CONFIG.simulation.routeHistoryLength;
-    this.history = this.history.filter((point) => point.travelled >= earliest);
+  private recordRoutePoint(force = false): void {
+    const point = this.currentPoint();
+    if (!point) return;
+    // Keep committed samples separate from the live head, so sub-metre steps accumulate.
+    const coordinate = this.routeCoordinate;
+    let left = -1, right = this.history.length;
+    while (left + 1 < right) {
+      const middle = (left + right) >> 1;
+      if (this.history[middle].travelled <= coordinate) left = middle;
+      else right = middle;
+    }
+    if (left >= 0 && Math.abs(this.history[left].travelled - coordinate) < 0.000001) this.history[left] = point;
+    else if (force || left < 0 || (left === this.history.length - 1 && coordinate - this.history[left].travelled >= 1.5)) {
+      this.history.splice(left + 1, 0, point);
+    }
+    const earliest = coordinate - APP_CONFIG.simulation.routeHistoryLength;
+    const latest = coordinate + APP_CONFIG.simulation.routeHistoryLength;
+    this.history = this.history.filter(sample => sample.travelled >= earliest && sample.travelled <= latest);
   }
 
-  private historyPoint(travelled: number): RoutePoint {
-    let low = 0;
-    let high = this.history.length - 1;
-    while (low < high) {
-      const mid = Math.ceil((low + high) / 2);
-      if (this.history[mid].travelled <= travelled) low = mid;
-      else high = mid - 1;
+  private historyWithCurrent(): RoutePoint[] {
+    const points = this.history.map(point => ({ ...point }));
+    const current = this.currentPoint();
+    if (!current) return points;
+    const index = points.findIndex(point => point.travelled >= current.travelled);
+    if (index < 0) points.push(current);
+    else if (Math.abs(points[index].travelled - current.travelled) < 0.000001) points[index] = current;
+    else points.splice(index, 0, current);
+    return points;
+  }
+
+  private historyPoint(travelled: number): RoutePoint | undefined {
+    const points = this.history;
+    const current = this.currentPoint();
+    if (!points.length || !current) return;
+    if (travelled < Math.min(points[0].travelled, current.travelled) - 0.001 ||
+        travelled > Math.max(points[points.length - 1].travelled, current.travelled) + 0.001) return;
+    let low = 0, high = points.length - 1;
+    while (low + 1 < high) {
+      const mid = (low + high) >> 1;
+      if (points[mid].travelled <= travelled) low = mid;
+      else high = mid;
     }
-    return this.history[low];
+    let a = points[low], b = points[high];
+    if (travelled >= current.travelled && current.travelled >= a.travelled) a = current;
+    if (travelled <= current.travelled && current.travelled <= b.travelled) b = current;
+    if (travelled >= points[points.length - 1].travelled) { a = points[points.length - 1]; b = current; }
+    const span = b.travelled - a.travelled;
+    const t = span > 0 ? Math.max(0, Math.min(1, (travelled - a.travelled) / span)) : 0;
+    const headingDelta = ((b.heading - a.heading + 540) % 360) - 180;
+    return { lon: a.lon + (b.lon - a.lon) * t, lat: a.lat + (b.lat - a.lat) * t,
+      height: a.height + (b.height - a.height) * t, heading: (a.heading + headingDelta * t + 360) % 360, travelled };
   }
 
   private async refreshSlope(): Promise<void> {
     if (!this.position) return;
     const segment = this.railway.network.segments.get(this.position.segmentId);
     if (!segment) return;
-    const travelDirection = this.position.direction * (Math.sign(this.train.velocity) || this.train.reverser || 1);
+    const generation = ++this.slopeGeneration;
+    const direction = this.position.direction;
     const span = Math.min(150, segment.length / 2);
     const center = pointAt(segment, this.position.offset);
-    const ahead = pointAt(segment, Math.max(0, Math.min(segment.length, this.position.offset + span * travelDirection)));
-    const behind = pointAt(segment, Math.max(0, Math.min(segment.length, this.position.offset - span * travelDirection)));
-    const slope = await this.elevation.slope(center, ahead, behind, span * 2);
-    const visibleHistory = this.history.slice(-30);
+    const aheadOffset = Math.max(0, Math.min(segment.length, this.position.offset + span * direction));
+    const behindOffset = Math.max(0, Math.min(segment.length, this.position.offset - span * direction));
+    const ahead = pointAt(segment, aheadOffset), behind = pointAt(segment, behindOffset);
+    // Physical slope always uses the locomotive's body-forward axis, including while reversing.
+    const slope = await this.elevation.slope(center, ahead, behind, Math.abs(aheadOffset - behindOffset));
+    if (generation !== this.slopeGeneration) return;
+    const visibleHistory = this.history.filter(point => Math.abs(point.travelled - this.routeCoordinate) < 180);
     const heights = await this.elevation.sample(visibleHistory);
+    if (generation !== this.slopeGeneration) return;
     visibleHistory.forEach((point, index) => { point.height = heights[index]; });
     if (this.position?.segmentId === segment.id) this.train.slope = slope;
   }
 
-  private async loadNearbyProvinces(): Promise<void> {
-    if (!this.position) return;
-    const segment = this.railway.network.segments.get(this.position.segmentId);
-    if (!segment) return;
-    const point = pointAt(segment, this.position.offset);
-    const provinces = new Set(this.stations.stations.filter((station) => station.province !== this.position!.province && Math.abs(station.longitude - point.lon) < 0.22 && Math.abs(station.latitude - point.lat) < 0.22).map((station) => station.province));
-    for (const province of [...provinces].slice(0, 2)) {
-      try {
-        await this.railway.load(province);
-      } catch (error) {
-        this.onError?.(error instanceof Error ? error.message : '相邻省份线路加载失败');
+  async retryBorder(): Promise<void> {
+    if (this.loadingBorder || !this.position) return;
+    const generation = this.tripGeneration;
+    const original = { ...this.position };
+    this.loadingBorder = true;
+    this.onUpdate?.();
+    try { await this.loadNearbyProvinces(true); }
+    finally {
+      if (generation !== this.tripGeneration) return;
+      this.loadingBorder = false;
+      if (this.position?.segmentId === original.segmentId && Math.abs(this.position.offset - original.offset) < 0.01) {
+        const direction = (this.train.reverser || 1) * this.position.direction;
+        const boundary = this.railway.network.nextBoundary(this.position.segmentId, this.position.offset, direction);
+        this.routeEnd = !boundary || (Math.abs(boundary.offset - this.position.offset) < 0.01 &&
+          this.railway.network.exitsAt(this.position.segmentId, boundary, direction).length === 0);
       }
+      this.onUpdate?.();
     }
+  }
+
+  private async loadNearbyProvinces(force = false): Promise<void> {
+    if (this.borderLoading) return this.borderLoading;
+    if (!this.position) return;
+    const point = this.currentPoint();
+    if (!point || (!force && this.lastBorderCheck && distance(point, this.lastBorderCheck) < 8000)) return;
+    this.lastBorderCheck = point;
+    const generation = this.tripGeneration;
+    const names = neighboringProvinces(this.position.province);
+    const nearby = new Set(this.stations.stations.filter(station => Math.abs(station.longitude - point.lon) < 0.22 && Math.abs(station.latitude - point.lat) < 0.22).map(station => station.province));
+    // Explicit adjacency covers borders with no station hints. Load sequentially to bound parsing pressure.
+    const ordered = [...new Set([...nearby, ...names])].filter(name => name !== this.position!.province && this.railway.byProvince(name));
+    this.borderLoading = (async () => {
+      for (const province of ordered) {
+        if (generation !== this.tripGeneration) break;
+        try { await this.railway.load(province); }
+        catch (error) { if (generation === this.tripGeneration) this.onError?.(error instanceof Error ? error.message : '相邻省份线路加载失败'); }
+      }
+    })();
+    try { await this.borderLoading; } finally { if (generation === this.tripGeneration) this.borderLoading = undefined; }
   }
 }

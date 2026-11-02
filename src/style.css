@@ -324,3 +324,52 @@ kbd { display: inline-block; min-width: 19px; padding: 2px 5px; border: 1px soli
   .cab-view .topbar-actions .view-toggle::after { display: none; }
   .cab-wiper { bottom: 357px; height: 100px; }
 }
+
+/* Demo: controls stay reachable while the map remains interactive. */
+.workspace { pointer-events: none; }
+.workspace .new-game-panel, .workspace .map-select-banner { pointer-events: auto; }
+.journey-strip { position: absolute; top: 78px; left: 24px; right: 24px; display: flex; gap: 28px; padding: 10px 14px; background: #111810dc; border: 1px solid #ffffff24; pointer-events: none; }
+.journey-strip span { display: flex; flex-direction: column; gap: 2px; }
+.journey-strip small { color: var(--muted); font-size: 10px; }
+.journey-strip strong { font-size: 12px; font-variant-numeric: tabular-nums; }
+.journey-practice { margin-left: auto; color: var(--accent); }
+.driving-ui:not(.cab-view) .speed-cluster, .driving-ui:not(.cab-view) .telemetry { top: 150px; }
+.route-status { position: absolute; left: 50%; top: 143px; transform: translateX(-50%); max-width: 48vw; padding: 10px 16px; background: #d8ff62; color: #17200d; font-size: 12px; text-align: center; }
+.brake-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.parking-toggle { border: 1px solid #ffffff40; padding: 4px 7px; background: transparent; color: #eee; font-size: 10px; }
+.parking-toggle.active { border-color: var(--accent); color: var(--accent); }
+.help-panel { max-width: 560px; padding: 30px; max-height: 88vh; overflow-y: auto; }
+.help-panel h2 { margin: 10px 0 16px; }
+.help-panel > p { line-height: 1.7; }
+.drive-steps { list-style: none; padding: 0; margin: 20px 0; display: grid; gap: 16px; }
+.drive-steps li { display: grid; gap: 5px; padding-left: 14px; border-left: 2px solid var(--accent); }
+.drive-steps b { font-size: 13px; }
+.drive-steps span { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.help-panel .full-width { margin-top: 18px; }
+.pause-strip { position: fixed; z-index: 8; left: 50%; top: 42%; transform: translate(-50%,-50%); display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 12px; padding: 22px; width: min(540px,92vw); background: #101810f5; border: 1px solid #d8ff6266; box-shadow: 0 14px 80px #0009; }
+.pause-strip span { color: var(--muted); font-size: 12px; }
+.data-error { position: fixed; z-index: 25; bottom: 10px; left: 20px; right: 20px; padding: 12px; background: #492e20; }
+.data-error button { margin-left: 12px; padding: 5px; border: 1px solid #ddd; }
+@media (max-width: 800px) {
+  .drive-topbar { padding: 0 10px; }
+  .topbar-actions { gap: 3px; }
+  .topbar-actions button { padding: 7px 6px; font-size: 10px; }
+  .drive-brand small { max-width: 105px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .journey-strip { left: 10px; right: 10px; top: 68px; gap: 14px; padding: 8px; flex-wrap: wrap; }
+  .journey-strip strong { font-size: 10px; }
+  .journey-practice { display: none !important; }
+  .driving-ui:not(.cab-view) .speed-cluster, .driving-ui:not(.cab-view) .telemetry { top: 135px; }
+  .route-status { top: 230px; max-width: 90vw; width: 90vw; }
+  .map-select-banner { left: 10px; right: 10px; bottom: auto; top: 12px; max-width: calc(100vw - 20px); }
+}
+@media (max-width: 480px) {
+  .drive-brand { display: none; }
+  .topbar-actions { width: 100%; justify-content: space-between; }
+  .help-panel { padding: 22px; }
+  .brake-footer { flex-wrap: wrap; }
+}
+
+@media (max-width: 600px) {
+ .topbar-actions button::after { display: none; }
+ .map-select-banner { transform: none; }
+}

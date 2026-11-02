@@ -8,13 +8,13 @@ defineEmits<{ continue: []; new: []; saves: []; settings: [] }>();
     <header class="start-header">
       <div class="brand-mark"><span>CR</span></div>
       <span>CHINA RAILWAY TRAIN SIM</span>
-      <span class="version">V 1.0</span>
+      <span class="version">DEMO 0.2</span>
     </header>
     <section class="hero">
       <div class="hero-copy">
         <p class="eyebrow"><span /> 真实地理 · 自由驾驶</p>
         <h1>国铁列车<br /><strong>驾驶模拟器</strong></h1>
-        <p class="hero-description">驶上真实中国铁路网络。<br />每一次前行，都由你掌控。</p>
+        <p class="hero-description">驶上真实中国铁路网络。<br />全国选站出发，沿原始铁路自由探索。</p>
         <div class="menu-actions">
           <button class="button button-primary button-large" :disabled="!ready" @click="$emit('new')">
             <span>开始新游戏</span><b>↗</b>

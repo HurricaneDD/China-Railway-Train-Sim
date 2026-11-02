@@ -17,7 +17,7 @@ export const APP_CONFIG = {
     elevationSampleSpacing: 120,
   },
   train: {
-    locomotive: { length: 20, width: 3.1, height: 4.1, mass: 138_000 },
+    locomotive: { length: 20, width: 3.3, height: 4.7, mass: 138_000 },
     cars: [
       { length: 25, width: 3.1, height: 3.8, mass: 52_000 },
       { length: 25, width: 3.1, height: 3.8, mass: 52_000 },
@@ -47,9 +47,9 @@ export const APP_CONFIG = {
     autosaveSeconds: 30,
   },
   camera: {
-    cabEyeHeight: 3.2,
+    cabEyeHeight: 2.2,
     cabForwardOffset: 7,
-    cabPitch: -0.07,
+    cabPitch: -0.12,
     cabHeadingSmoothing: 6,
     heading: 0,
     pitch: -0.42,

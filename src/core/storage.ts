@@ -20,8 +20,13 @@ async function transaction<T>(mode: IDBTransactionMode, action: (store: IDBObjec
   const db = await openDatabase();
   try {
     return await new Promise<T>((resolve, reject) => {
-      const request = action(db.transaction(STORE, mode).objectStore(STORE));
-      request.onsuccess = () => resolve(request.result);
+      const tx = db.transaction(STORE, mode);
+      let result: T;
+      tx.oncomplete = () => resolve(result);
+      tx.onabort = () => reject(tx.error ?? new Error('存档事务已中止，未写入完成'));
+      tx.onerror = () => reject(tx.error ?? new Error('存档事务失败'));
+      const request = action(tx.objectStore(STORE));
+      request.onsuccess = () => { result = request.result; };
       request.onerror = () => reject(request.error);
     });
   } finally {
@@ -38,6 +43,23 @@ export const saveStore = {
     if (!validateGameSave(save)) throw new Error('存档格式无效');
     await transaction('readwrite', (store) => store.put(structuredClone(save)));
   },
+  async import(save: GameSave): Promise<GameSave> {
+    if (!validateGameSave(save)) throw new Error('存档格式无效');
+    const imported = structuredClone(save);
+    await transaction('readwrite', (store) => {
+      const request = store.get(imported.id);
+      request.addEventListener('success', () => {
+        // Check and add share one readwrite transaction, so an import cannot overwrite a save.
+        if (request.result !== undefined) {
+          imported.id = `import-${crypto.randomUUID()}`;
+          imported.name = `${imported.name}（导入副本）`;
+        }
+        store.add(imported);
+      });
+      return request;
+    });
+    return imported;
+  },
   async delete(id: string): Promise<void> {
     await transaction('readwrite', (store) => store.delete(id));
   },
@@ -52,16 +74,20 @@ export function validateGameSave(value: unknown): value is GameSave {
   const train = save.train;
   const position = save.position;
   const finite = (input: unknown): input is number => typeof input === 'number' && Number.isFinite(input);
-  if (save.version !== 1 || typeof save.id !== 'string' || typeof save.name !== 'string' || !Number.isFinite(Date.parse(save.savedAt ?? '')) || !finite(save.elapsed)) return false;
-  if (!position || typeof position.segmentId !== 'string' || typeof position.province !== 'string' || !Number.isFinite(position.offset) || position.offset < 0 || !Number.isFinite(position.travelled) || (position.direction !== 1 && position.direction !== -1)) return false;
+  if (save.version !== 1 || typeof save.id !== 'string' || !save.id.trim() || typeof save.name !== 'string' || !save.name.trim() || typeof save.savedAt !== 'string' || !Number.isFinite(Date.parse(save.savedAt)) || !finite(save.elapsed) || save.elapsed < 0) return false;
+  if (!position || typeof position.segmentId !== 'string' || !position.segmentId || typeof position.province !== 'string' || !position.province || !Number.isFinite(position.offset) || position.offset < 0 || !Number.isFinite(position.travelled) || position.travelled < 0 || (position.direction !== 1 && position.direction !== -1)) return false;
   if (!train) return false;
   const numericFields = ['velocity', 'throttle', 'brakeCommand', 'brakeActual', 'brakePipe', 'acceleration', 'tractionForce', 'brakeForce', 'resistanceForce', 'gradeForce', 'slope', 'sandRemaining'];
   const trainValues = train as unknown as Record<string, unknown>;
   if (!numericFields.every((field) => typeof trainValues[field] === 'number' && Number.isFinite(trainValues[field]))) return false;
-  if (train.throttle < 0 || train.throttle > 100 || train.brakeCommand < 0 || train.brakeCommand > 100 || train.brakeActual < 0 || train.brakeActual > 100 || (train.reverser !== -1 && train.reverser !== 0 && train.reverser !== 1) || typeof train.adhesionLimited !== 'boolean') return false;
+  if (train.throttle < 0 || train.throttle > 100 || train.brakeCommand < 0 || train.brakeCommand > 100 || train.brakeActual < 0 || train.brakeActual > 100 || (train.reverser !== -1 && train.reverser !== 0 && train.reverser !== 1) || typeof train.adhesionLimited !== 'boolean' || train.brakePipe < 0 || train.brakePipe > 1000 || train.sandRemaining < 0) return false;
   if (!Array.isArray(save.routeHistory) || save.routeHistory.length === 0 || save.routeHistory.length > 5000) return false;
   if (!save.routeHistory.every((point) => point && ['lon', 'lat', 'height', 'heading', 'travelled'].every((field) => typeof (point as unknown as Record<string, unknown>)[field] === 'number' && Number.isFinite((point as unknown as Record<string, unknown>)[field])))) return false;
-  return Array.isArray(save.consist);
+  if (save.routeHistory.some((point, index) => point.lon < -180 || point.lon > 180 || point.lat < -90 || point.lat > 90 || (index > 0 && point.travelled < save.routeHistory![index - 1].travelled))) return false;
+  return Array.isArray(save.consist) && save.consist.length <= 100 && save.consist.every((vehicle) => vehicle && ['length', 'width', 'height', 'mass'].every((field) => {
+    const value = (vehicle as unknown as Record<string, unknown>)[field];
+    return finite(value) && value > 0;
+  }));
 }
 
 export function loadSettings(): GameSettings {

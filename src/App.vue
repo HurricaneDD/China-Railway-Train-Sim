@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import DrivingHud from './components/DrivingHud.vue';
 import JunctionDialog from './components/JunctionDialog.vue';
 import MapView from './components/MapView.vue';
@@ -30,6 +30,12 @@ const saves = ref<GameSave[]>([]);
 const settings = ref<GameSettings>(loadSettings());
 const selectedProvince = ref('');
 const selectingMap = ref(false);
+const userPaused = ref(false);
+const showHelp = ref(false);
+const dataError = ref('');
+watch([userPaused, overlay, showHelp, busy, screen], () => {
+  if (screen.value === 'driving') session.setPaused(userPaused.value || !!overlay.value || showHelp.value || busy.value);
+});
 const updateKey = ref(0);
 const toastMessage = ref('');
 const toastKind = ref<'info' | 'error'>('info');
@@ -51,13 +57,15 @@ onMounted(async () => {
   window.addEventListener('keydown', keyDown);
   window.addEventListener('keyup', keyUp);
   window.addEventListener('pointerup', releaseControls);
+  window.addEventListener('blur', loseFocus);
   document.addEventListener('visibilitychange', visibilityChanged);
   try {
     await session.initialize();
     dataReady.value = true;
     await refreshSaves();
   } catch (error) {
-    notify(error instanceof Error ? error.message : '基础数据加载失败', true);
+    dataError.value = error instanceof Error ? error.message : '基础数据加载失败';
+    notify(dataError.value, true);
   }
 });
 
@@ -67,6 +75,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', keyDown);
   window.removeEventListener('keyup', keyUp);
   window.removeEventListener('pointerup', releaseControls);
+  window.removeEventListener('blur', loseFocus);
   document.removeEventListener('visibilitychange', visibilityChanged);
 });
 
@@ -98,7 +107,10 @@ async function loadSave(save: GameSave): Promise<void> {
     await session.restore(save);
     selectedProvince.value = save.position.province;
     overlay.value = null;
+    userPaused.value = true;
+    showHelp.value = false;
     screen.value = 'driving';
+    session.setPaused(true);
     map.value?.clearStations();
     map.value?.setPicking();
     map.value?.setCameraRange(settings.value.cameraRange);
@@ -111,6 +123,11 @@ async function loadSave(save: GameSave): Promise<void> {
   }
 }
 
+async function newGame(): Promise<void> {
+  screen.value = 'new';
+  await selectProvince(selectedProvince.value || '江苏省');
+}
+
 async function selectProvince(name: string): Promise<void> {
   if (busy.value) return;
   selectedProvince.value = name;
@@ -120,11 +137,9 @@ async function selectProvince(name: string): Promise<void> {
     await session.railway.load(name);
     const provinceStations = session.stations.stations.filter((station) => station.province === name);
     map.value?.showStations(provinceStations);
-    if (provinceStations.length) {
-      const center = provinceStations.reduce((acc, station) => ({ lon: acc.lon + station.longitude / provinceStations.length, lat: acc.lat + station.latitude / provinceStations.length }), { lon: 0, lat: 0 });
-      map.value?.flyTo(center);
-      await map.value?.renderRailway(session.railway.network.segmentsNear(center, settings.value.renderRadius));
-    } else {
+    const segments = [...session.railway.network.segments.values()].filter((segment) => segment.properties.province === name);
+    map.value?.showProvinceRailway(segments);
+    if (!provinceStations.length) {
       notify('该省份没有带坐标车站，可在已有线路区域直接选点');
     }
   } catch (error) {
@@ -172,14 +187,17 @@ async function startStation(station: Station): Promise<void> {
 }
 
 async function beginDriving(point: LonLat): Promise<void> {
+  userPaused.value = false;
+  showHelp.value = true;
   screen.value = 'driving';
+  session.setPaused(true);
   overlay.value = null;
   selectingMap.value = false;
   map.value?.setPicking();
   map.value?.clearStations();
   map.value?.setCameraRange(settings.value.cameraRange);
   lastRenderPoint = point;
-  await map.value?.renderRailway(session.railway.network.segmentsNear(point, settings.value.renderRadius));
+  await map.value?.renderRailway(session.railway.network.segmentsNear(point, settings.value.renderRadius, APP_CONFIG.data.maxRenderSegments, session.position?.segmentId));
   await refreshSaves();
 }
 
@@ -187,7 +205,7 @@ async function renderCurrentRailway(): Promise<void> {
   const point = session.currentPoint();
   if (point && map.value) {
     lastRenderPoint = point;
-    await map.value.renderRailway(session.railway.network.segmentsNear(point, settings.value.renderRadius));
+    await map.value.renderRailway(session.railway.network.segmentsNear(point, settings.value.renderRadius, APP_CONFIG.data.maxRenderSegments, session.position?.segmentId));
   }
 }
 
@@ -196,7 +214,7 @@ async function maybeRenderTrack(point: LonLat): Promise<void> {
   renderingTrack = true;
   lastRenderPoint = point;
   try {
-    await map.value.renderRailway(session.railway.network.segmentsNear(point, settings.value.renderRadius));
+    await map.value.renderRailway(session.railway.network.segmentsNear(point, settings.value.renderRadius, APP_CONFIG.data.maxRenderSegments, session.position?.segmentId));
   } catch {
     notify('前方轨道显示更新失败，列车驾驶不受影响', true);
   } finally {
@@ -261,9 +279,9 @@ async function importSave(file: File): Promise<void> {
   try {
     const value: unknown = JSON.parse(await file.text());
     if (!validateGameSave(value)) throw new Error('文件不是受支持的 V1 存档，必要字段缺失或格式无效');
-    await saveStore.put(value);
+    const imported = await saveStore.import(value);
     await refreshSaves();
-    notify('存档导入成功');
+    notify(imported.id === value.id ? '存档导入成功' : '同名 ID 已另存为副本，原存档已保留');
   } catch (error) {
     notify(error instanceof Error ? error.message : '存档导入失败', true);
   }
@@ -278,6 +296,8 @@ async function returnMenu(): Promise<void> {
   if (settings.value.autosave) await autoSave();
   session.stop();
   horn.stop();
+  userPaused.value = false;
+  showHelp.value = false;
   screen.value = 'menu';
   overlay.value = null;
   map.value?.setPicking();
@@ -305,6 +325,12 @@ function triggerSand(): void {
 }
 
 function keyDown(event: KeyboardEvent): void {
+  if (screen.value === 'driving' && !overlay.value && !showHelp.value && ['Escape', 'KeyP'].includes(event.code) && !(event.target instanceof HTMLInputElement)) {
+    event.preventDefault();
+    if (!event.repeat) userPaused.value = !userPaused.value;
+    return;
+  }
+  if (session.paused) return;
   if (screen.value !== 'driving' || overlay.value || event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLTextAreaElement) return;
   if (['Shift', 'Control', 'Space'].includes(event.code)) event.preventDefault();
   if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
@@ -332,23 +358,58 @@ function releaseControls(): void {
   horn.stop();
 }
 
-function visibilityChanged(): void {
-  if (document.hidden && settings.value.autosave) void autoSave();
+function loseFocus(): void {
+  session.clearControls();
+  horn.stop();
+  if (screen.value === 'driving') userPaused.value = true;
 }
+
+function visibilityChanged(): void {
+  if (document.hidden) {
+    loseFocus();
+    if (settings.value.autosave) void autoSave();
+  }
+}
+
+async function retryData(): Promise<void> {
+  dataError.value = '';
+  try { await session.initialize(); dataReady.value = true; }
+  catch (error) { dataError.value = error instanceof Error ? error.message : '基础数据加载失败'; }
+}
+
 </script>
 
 <template>
   <div class="app-shell" :class="{ 'is-driving': screen === 'driving' }">
-    <MapView :session="session" @ready="map = $event; mapReady = true" @error="notify($event, true)" />
+    <MapView :session="session" @ready="map = $event; mapReady = true" @error="notify($event, true); userPaused = true" />
     <div v-if="screen !== 'driving'" class="map-shade" />
-    <StartMenu v-if="screen === 'menu'" :has-save="hasSave" :ready="ready" @continue="continueGame" @new="screen = 'new'" @saves="openOverlay('saves')" @settings="openOverlay('settings')" />
+    <StartMenu v-if="screen === 'menu'" :has-save="hasSave" :ready="ready" @continue="continueGame" @new="newGame" @saves="openOverlay('saves')" @settings="openOverlay('settings')" />
     <div v-else-if="screen === 'new'" class="workspace">
-      <div class="workspace-backdrop" @click="screen = 'menu'" />
-      <NewGamePanel :stations="session.stations" :provinces="session.railway.provinces" :selected-province="selectedProvince" :busy="busy" @close="screen = 'menu'" @province="selectProvince" @station="startStation" @location="enableMapSelection" />
-      <div v-if="selectingMap" class="map-select-banner"><span class="pulse" />地图选点已启用 · 点击铁路附近位置<button @click="selectingMap = false; map?.setPicking()">取消</button></div>
+
+      <NewGamePanel v-if="!selectingMap" :stations="session.stations" :provinces="session.railway.provinces" :selected-province="selectedProvince" :busy="busy" @close="screen = 'menu'" @province="selectProvince" @station="startStation" @location="enableMapSelection" />
+      <div v-if="selectingMap" class="map-select-banner"><span class="pulse" />地图选点已启用 · 点击铁路附近位置<button @click="selectingMap = false; map?.setPicking()">返回选站</button></div>
     </div>
-    <DrivingHud v-else :session="session" :update-key="updateKey" :camera-range="settings.cameraRange" :camera-mode="cameraMode" @view="toggleCamera" @menu="returnMenu" @save="quickSave" @settings="openOverlay('settings')" @reverser="changeReverser" @horn="(held) => held ? horn.start() : horn.stop()" @sand="triggerSand" @camera="(range) => { map?.setCameraRange(range); settings.cameraRange = Math.max(35, Math.min(900, range)); }" />
-    <JunctionDialog v-if="session.junction" :junction="session.junction" @choose="session.chooseJunction" />
+    <DrivingHud v-else :session="session" :update-key="updateKey" :camera-range="settings.cameraRange" :camera-mode="cameraMode" @view="toggleCamera" @pause="userPaused = !userPaused" @help="showHelp = true" @parking="session.toggleParkingBrake()" @retry="session.retryBorder()" @menu="returnMenu" @save="quickSave" @settings="openOverlay('settings')" @reverser="changeReverser" @horn="(held) => held ? horn.start() : horn.stop()" @sand="triggerSand" @camera="(range) => { map?.setCameraRange(range); settings.cameraRange = Math.max(35, Math.min(900, range)); }" />
+    <JunctionDialog v-if="session.junction && !showHelp && !userPaused && !overlay" :junction="session.junction" @choose="(id) => session.chooseJunction(id)" />
+    <div v-if="screen === 'driving' && showHelp" class="modal-backdrop">
+      <section class="panel help-panel" role="dialog" aria-modal="true" aria-labelledby="help-title">
+        <p class="eyebrow">FREE DRIVE / 全国自由驾驶 DEMO</p>
+        <h2 id="help-title">从这里，开出第一公里</h2>
+        <p>列车已驻车，所有省份均可自由出发。先熟悉操纵，再沿真实铁路探索。</p>
+        <ol class="drive-steps">
+          <li><b>01 · 起步</b><span>松开驻车，按 Shift 或拖动牵引手柄，逐步增加牵引。</span></li>
+          <li><b>02 · 滑行与停车</b><span>Ctrl 降低牵引。按住空格约 4 秒施加全部制动，松开后约 4 秒缓解；停稳后可启用驻车。</span></li>
+          <li><b>03 · 选择方向</b><span>分岔处会暂停，选择后继续。倒车需先停稳；P / Esc 随时暂停。</span></li>
+        </ol>
+        <p class="fine-print">可选练习：累计行驶 1 km 后停稳。自由驾驶不受练习限制；邻近车站距离为直线距离。</p>
+        <button class="button button-primary full-width" @click="showHelp = false">进入驾驶</button>
+      </section>
+    </div>
+    <div v-else-if="screen === 'driving' && userPaused && !overlay" class="pause-strip" role="status">
+      <strong>驾驶已暂停</strong><span>位置与速度已保留</span><button class="button button-primary" @click="userPaused = false">继续驾驶</button>
+      <button class="button button-ghost" @click="showHelp = true">操作说明</button>
+    </div>
+    <div v-if="dataError" class="data-error" role="alert">{{ dataError }}<button @click="retryData">重试加载</button></div>
     <div v-if="overlay" class="modal-backdrop" @click.self="overlay = null">
       <SavePanel v-if="overlay === 'saves'" :saves="saves" :busy="busy" :in-game="session.running" @close="overlay = null" @load="loadSave" @delete="deleteSave" @save="namedSave" @export="exportSave" @import="importSave" />
       <SettingsPanel v-else :settings="settings" @close="overlay = null" @change="changeSettings" />

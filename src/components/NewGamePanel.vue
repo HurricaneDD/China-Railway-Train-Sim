@@ -10,7 +10,10 @@ const tab = ref<'station' | 'map'>('station');
 const query = ref('');
 const province = ref(props.selectedProvince);
 const city = ref('');
-const results = computed(() => props.stations.search(query.value, province.value, city.value));
+const limit = ref(60);
+const allResults = computed(() => props.stations.search(query.value, province.value, city.value, 10000));
+const results = computed(() => allResults.value.slice(0, limit.value));
+watch([query, province, city], () => { limit.value = 60; });
 const cities = computed(() => props.stations.cities(province.value));
 watch(() => props.selectedProvince, (value) => { if (value) province.value = value; });
 watch(province, () => { city.value = ''; });
@@ -34,6 +37,7 @@ function choose(station: StationResult): void {
       <button :class="{ active: tab === 'map' }" @click="tab = 'map'">地图选点</button>
     </div>
     <div v-if="tab === 'station'" class="panel-body station-picker">
+      <p class="fine-print">全国线路开放 · 选择省份浏览，或<button class="text-button" @click="province = ''; city = ''">全国搜站</button></p>
       <label class="search-field"><span>⌕</span><input v-model="query" placeholder="站名 / 电报码 / 旧称" autofocus /></label>
       <div class="filter-row">
         <select v-model="province" aria-label="按省份筛选" @change="chooseProvince">
@@ -45,13 +49,14 @@ function choose(station: StationResult): void {
           <option v-for="item in cities" :key="item" :value="item">{{ item }}</option>
         </select>
       </div>
-      <div class="result-meta"><span>{{ query || province || city ? '搜索结果' : '车站名录' }}</span><span>{{ results.length }} 条</span></div>
+      <div class="result-meta"><span>{{ query || province || city ? '搜索结果' : '车站名录' }}</span><span>{{ allResults.length }} 条</span></div>
       <div class="station-results">
         <button v-for="station in results" :key="station.telecode" class="station-row" :disabled="busy || station.pending" @click="choose(station)">
           <span class="station-code">{{ station.telecode }}</span>
           <span class="station-name"><strong>{{ station.name }}<small v-if="station.pending">暂无坐标</small></strong><small>{{ station.pending ? '仅支持检索，不能作为出发位置' : `${station.province} · ${station.city}` }}</small></span>
           <span class="row-arrow">{{ station.pending ? '—' : '→' }}</span>
         </button>
+        <button v-if="results.length < allResults.length" class="button button-ghost full-width" @click="limit += 60">显示更多车站（已显示 {{ results.length }}）</button>
         <p v-if="!results.length" class="empty-state">没有找到匹配的车站</p>
       </div>
     </div>

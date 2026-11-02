@@ -42,3 +42,13 @@ describe('列车动力学', () => {
     expect(train.tractionForce).toBeGreaterThan(limited);
   });
 });
+
+it('全制动在正负坡道上都能保持静止，不反复溜车', () => {
+  for (const slope of [-0.035, 0.035]) {
+    const train = initialTrainState();
+    train.brakeCommand = train.brakeActual = 100;
+    for (let i = 0; i < 600; i++) stepDynamics(train, 1 / 60, slope, true);
+    expect(train.velocity).toBe(0);
+    expect(train.acceleration).toBe(0);
+  }
+});

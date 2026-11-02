@@ -46,7 +46,15 @@ export function stepDynamics(state: TrainState, dt: number, slope: number, brake
   state.gradeForce = totalMass() * G * Math.sin(Math.atan(slope));
   state.slope = slope;
 
-  const direction = Math.sign(state.velocity);
+  // At rest, brakes and static rolling resistance oppose the applied force.
+  // Otherwise full brakes would still allow a gravity impulse every other tick.
+  const appliedForce = state.tractionForce - state.gradeForce;
+  if (speed < 0.002 && Math.abs(appliedForce) <= state.brakeForce + config.resistance.a) {
+    state.velocity = 0;
+    state.acceleration = 0;
+    return;
+  }
+  const direction = Math.sign(state.velocity) || Math.sign(appliedForce);
   const netForce = state.tractionForce - direction * state.brakeForce - direction * state.resistanceForce - state.gradeForce;
   state.acceleration = netForce / totalMass();
   const nextVelocity = state.velocity + state.acceleration * dt;
