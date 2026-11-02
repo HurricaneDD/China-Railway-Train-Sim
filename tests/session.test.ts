@@ -34,6 +34,18 @@ function sessionOnLine(length = 3000, split = 1000, initialize = true) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('驾驶与编组', () => {
+  it('靠近唯一的桥隧推定连接时显示提醒，驶过后清除', () => {
+    const { session, internals } = sessionOnLine();
+    const next = session.railway.network.segments.get('320000:2:0')!;
+    next.properties.bridge = true;
+    next.properties.layer = 1;
+    session.position!.offset = 950;
+    internals.advance(1);
+    expect(session.connectionWarning).toContain('桥隧过渡');
+    internals.advance(100);
+    expect(session.position!.segmentId).toBe(next.id);
+    expect(session.connectionWarning).toBe('');
+  });
   it('60Hz微步推进100米，所有车厢保持配置间距', () => {
     const { session, internals } = sessionOnLine();
     const before = session.consistPoints();

@@ -16,6 +16,7 @@ export class GameSession {
   position?: SavePosition;
   junction?: JunctionRequest;
   junctionDistance = Infinity;
+  connectionWarning = '';
   running = false;
   paused = false;
   elapsed = 0;
@@ -71,6 +72,7 @@ export class GameSession {
     this.clearControls();
     this.elapsed = 0;
     this.junction = undefined;
+    this.connectionWarning = '';
     this.preferredNext = undefined;
     this.running = true;
     this.paused = false;
@@ -103,6 +105,7 @@ export class GameSession {
     this.clearControls();
     this.elapsed = save.elapsed;
     this.junction = undefined;
+    this.connectionWarning = '';
     this.preferredNext = undefined;
     this.running = true;
     this.paused = false;
@@ -197,6 +200,18 @@ export class GameSession {
 
   chooseJunction(segmentId: string): void {
     if (!this.junction?.options.some((option) => option.segmentId === segmentId)) return;
+    if (!this.position) return;
+    const sign = Math.sign(this.train.velocity) || this.train.reverser;
+    const direction = sign * this.position.direction;
+    const boundary = this.railway.network.nextBoundary(this.position.segmentId, this.position.offset, direction);
+    if (!boundary || boundary.nodeId !== this.junction.nodeId || !this.railway.network.drivableExits(this.position.segmentId, boundary, direction).some(exit => exit.key === segmentId)) {
+      this.onError?.('道岔候选已变化，请重新选择');
+      this.junction = undefined;
+      this.preferredNext = undefined;
+      this.checkJunction();
+      this.onUpdate?.();
+      return;
+    }
     this.preferredNext = segmentId;
     this.junction = undefined;
     this.junctionDistance = Infinity;
@@ -305,7 +320,7 @@ export class GameSession {
       this.routeCoordinate += movement;
       remaining -= movement;
       if (Math.abs(movement) < available - 0.000001) break;
-      const exits = this.railway.network.exitsAt(segment.id, boundary, coordinateDirection);
+      const exits = this.railway.network.drivableExits(segment.id, boundary, coordinateDirection);
       const remembered = this.knownConnection(exits, movementSign);
       const next = this.preferredNext ? exits.find(exit => exit.key === this.preferredNext) : exits.length === 1 ? exits[0] : movementSign < 0 ? remembered : undefined;
       this.recordRoutePoint(true);
@@ -344,6 +359,7 @@ export class GameSession {
 
   private checkJunction(): void {
     if (!this.position || this.junction) return;
+    this.connectionWarning = '';
     const segment = this.railway.network.segments.get(this.position.segmentId);
     if (!segment) return;
     const sign = Math.sign(this.train.velocity) || this.train.reverser;
@@ -352,7 +368,10 @@ export class GameSession {
     const boundary = this.railway.network.nextBoundary(segment.id, this.position.offset, direction);
     if (!boundary) return;
     const remaining = Math.abs(boundary.offset - this.position.offset);
-    const exits = this.railway.network.exitsAt(segment.id, boundary, direction);
+    const candidates = this.railway.network.connectionsAt(segment.id, boundary, direction);
+    const exits = candidates.filter(candidate => candidate.valid);
+    this.connectionWarning = remaining < APP_CONFIG.simulation.junctionPreviewDistance && exits.length === 1 && exits[0].confidence === 'uncertain'
+      ? `前方连接为几何推定：${exits[0].reason}` : '';
     this.junctionDistance = exits.length > 1 && remaining < APP_CONFIG.simulation.junctionPreviewDistance ? remaining : Infinity;
     if (exits.length > 1 && remaining <= APP_CONFIG.simulation.junctionStopDistance && !this.preferredNext && !(sign < 0 && this.knownConnection(exits, sign, remaining))) {
       this.openJunction(segment.id, boundary, direction);
@@ -360,16 +379,28 @@ export class GameSession {
   }
 
   private openJunction(segmentId: string, boundary: RailBoundary, direction: number): void {
-    const options = this.railway.network.exitsAt(segmentId, boundary, direction).map((exit): JunctionOption => {
+    const options = this.railway.network.drivableExits(segmentId, boundary, direction).map((exit): JunctionOption => {
       const next = this.railway.network.segments.get(exit.segmentId)!;
       const a = pointAt(next, exit.offset);
       const b = pointAt(next, exit.offset + exit.direction * Math.min(300, exit.direction > 0 ? next.length - exit.offset : exit.offset));
       const degrees = bearing(a, b);
-      const station = this.stations.nearest(b, next.properties.province);
-      const nextStation = station && distance(b, { lon: station.longitude, lat: station.latitude }) <= 8000 ? station.name : '暂无车站信息';
-      return { segmentId: exit.key, name: next.properties.name, bearing: degrees, direction: compassDirection(degrees), nextStation };
+      const path = this.railway.network.previewPath(exit);
+      const name = next.properties.name !== '未命名铁路' ? next.properties.name :
+        path.names.length === 1 ? `${path.names[0]}连接区段（推断）` : '未识别轨道';
+      return { segmentId: exit.key, name, bearing: degrees, direction: compassDirection(degrees), nextStation: '后续车站未确认',
+        angle: exit.angle, preview: path.points, previewLength: path.length, stopReason: path.stopReason,
+        confidence: path.uncertain ? 'uncertain' : 'derived', reason: exit.reason };
     });
-    this.junction = { nodeId: boundary.nodeId, atSegmentEnd: direction > 0, options };
+    this.clearControls();
+    const current = this.railway.network.segments.get(segmentId)!;
+    const incomingBearing = bearing(pointAt(current, boundary.offset - Math.sign(direction) * 10), pointAt(current, boundary.offset));
+    const diagnostics = this.railway.network.connectionsAt(segmentId, boundary, direction).map(connection => ({
+      ...connection, incoming: { segmentId, osmId: current.properties.osmId, properties: current.properties, direction },
+      outgoing: this.railway.network.segments.get(connection.segmentId)?.properties,
+      previewStop: options.find(option => option.segmentId === connection.key)?.stopReason,
+    }));
+    this.junction = { nodeId: boundary.nodeId, atSegmentEnd: direction > 0, options,
+      currentName: current.properties.name === '未命名铁路' ? '未识别轨道' : current.properties.name, incomingBearing, diagnostics };
     this.onUpdate?.();
   }
 
@@ -413,7 +444,7 @@ export class GameSession {
       coordinate -= step;
       distanceLeft -= step;
       if (available > step + 0.000001) continue;
-      const choices = this.railway.network.exitsAt(segment.id, boundary, -direction);
+      const choices = this.railway.network.drivableExits(segment.id, boundary, -direction);
       const known = this.historyPoint(coordinate - 2);
       const matches = known ? choices.filter(exit => {
         const next = this.railway.network.segments.get(exit.segmentId)!;
@@ -523,7 +554,7 @@ export class GameSession {
         const direction = (this.train.reverser || 1) * this.position.direction;
         const boundary = this.railway.network.nextBoundary(this.position.segmentId, this.position.offset, direction);
         this.routeEnd = !boundary || (Math.abs(boundary.offset - this.position.offset) < 0.01 &&
-          this.railway.network.exitsAt(this.position.segmentId, boundary, direction).length === 0);
+          this.railway.network.drivableExits(this.position.segmentId, boundary, direction).length === 0);
       }
       this.onUpdate?.();
     }

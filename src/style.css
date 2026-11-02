@@ -373,3 +373,22 @@ kbd { display: inline-block; min-width: 19px; padding: 2px 5px; border: 1px soli
  .topbar-actions button::after { display: none; }
  .map-select-banner { transform: none; }
 }
+
+.junction-dialog { max-height: min(92vh, 900px); overflow-y: auto; padding: 20px; text-align: left; }
+.junction-dialog h2 { font-size: 22px; }
+.junction-map { display: block; width: 100%; height: 155px; margin-top: 10px; background: #0d110e; border: 1px solid var(--line); }
+.junction-approach { fill: none; stroke: #d8ff62; stroke-width: 3; }
+.junction-path { fill: none; stroke: #8c9990; stroke-width: 2; opacity: .65; vector-effect: non-scaling-stroke; }
+.junction-path.active { stroke: #d8ff62; stroke-width: 4; opacity: 1; }
+.junction-options { margin-top: 8px; max-height: 32vh; overflow-y: auto; }
+.junction-options button { min-height: 58px; padding: 10px; }
+.junction-options button.selected { border-color: var(--accent); background: rgba(216,255,98,.1); }
+.junction-confirm { width: 100%; min-height: 44px; margin-top: 10px; background: var(--accent); color: #111; font-weight: 700; }
+.junction-confirm:disabled { opacity: .4; }
+.junction-dialog .fine-print { display: block; margin-top: 8px; }
+.junction-diagnostics { margin-top: 8px; font-size: 10px; }
+.junction-diagnostics pre { max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.junction-dialog .junction-map-caption { margin: 4px 0; color: var(--muted); font-size: 10px; }
+.junction-key { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0; }
+.junction-key button { flex: 0 0 44px; min-height: 44px; border: 1px solid var(--line); background: #1d211d; color: #fff; }
+.junction-key button.selected { color: #111; border-color: var(--accent); background: var(--accent); }

@@ -8,7 +8,8 @@ void props.updateKey;
 
 function lineName(): string {
   if (!props.session.position) return '未定位';
-  return props.session.railway.network.segments.get(props.session.position.segmentId)?.properties.name ?? '未命名铁路';
+  const name = props.session.railway.network.segments.get(props.session.position.segmentId)?.properties.name;
+  return !name || name === '未命名铁路' ? '未识别轨道' : name;
 }
 function provinceName(): string {
   return props.session.position?.province ?? '';
@@ -48,9 +49,10 @@ function direction(value: Reverser): void {
       <span class="journey-practice"><small>自由驾驶练习</small><strong>{{ session.practiceComplete ? '✓ 已完成 1 km 后停稳' : (session.position?.travelled ?? 0) >= 1000 ? '已满 1 km · 尝试停稳' : '行驶 1 km 后停稳' }}</strong></span>
     </section>
     <div v-if="session.loadingBorder || session.routeEnd" class="route-status" role="status">
-      {{ session.loadingBorder ? '正在检查相邻省份线路，已暂停推进…' : '已到当前可用线路端点 · 可换向后退或返回选站' }}
+      {{ session.loadingBorder ? '正在检查相邻省份线路，已暂停推进…' : '前方线路中断或连接未确认 · 可换向后退或返回选站' }}
       <button v-if="session.routeEnd && !session.loadingBorder" @click="$emit('retry')">重新检查前方线路</button>
     </div>
+    <div v-else-if="session.connectionWarning" class="route-status" role="status">{{ session.connectionWarning }}</div>
     <section class="speed-cluster">
       <p>当前速度 <span>SPEED</span></p>
       <div><strong>{{ Math.abs(session.train.velocity * 3.6).toFixed(1) }}</strong><span>km/h</span></div>

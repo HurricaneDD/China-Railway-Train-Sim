@@ -330,7 +330,7 @@ function keyDown(event: KeyboardEvent): void {
     if (!event.repeat) userPaused.value = !userPaused.value;
     return;
   }
-  if (session.paused) return;
+  if (session.paused || session.junction) return;
   if (screen.value !== 'driving' || overlay.value || event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLTextAreaElement) return;
   if (['Shift', 'Control', 'Space'].includes(event.code)) event.preventDefault();
   if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {

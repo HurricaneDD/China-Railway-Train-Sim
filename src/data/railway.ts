@@ -1,6 +1,6 @@
 import { APP_CONFIG } from '../config';
 import type { LonLat, ProvinceInfo, RailNode, RailProperties, RailSegment, SnapResult } from '../types';
-import { distance, nearestOnSegment } from '../utils/geo';
+import { bearing, distance, nearestOnSegment, pointAt } from '../utils/geo';
 import { fetchJson } from '../utils/assets';
 
 export interface RailBoundary {
@@ -14,6 +14,14 @@ export interface RailExit {
   offset: number;
   /** Outgoing direction along the original coordinate array. */
   direction: 1 | -1;
+}
+
+export interface RailConnection extends RailExit {
+  angle: number;
+  gap: number;
+  valid: boolean;
+  reason: string;
+  confidence: 'derived' | 'uncertain';
 }
 
 interface ProvinceIndex {
@@ -116,6 +124,13 @@ export class RailNetwork {
     return attachments[0];
   }
 
+  /** Read-only snapshot for offline diagnostics; boundaries remain owned by the network. */
+  boundariesOf(segmentId: string): RailBoundary[] {
+    this.ensureAttachments();
+    const segment = this.segments.get(segmentId);
+    return segment ? (this.boundaries.get(segment.id) ?? []).map(boundary => ({ ...boundary })) : [];
+  }
+
   /** Oriented exits at a shared vertex, excluding only the direction just travelled from. */
   exitsAt(segmentId: string, boundary: RailBoundary, coordinateDirection: number): RailExit[] {
     this.ensureAttachments();
@@ -123,6 +138,79 @@ export class RailNetwork {
     if (!segment) return [];
     return (this.nodeExits.get(boundary.nodeId) ?? []).filter(exit => !(exit.segmentId === segment.id &&
       Math.abs(exit.offset - boundary.offset) < 0.000001 && exit.direction === -Math.sign(coordinateDirection)));
+  }
+
+  /** Derived geometry only: positive angle turns right, negative turns left. */
+  connectionsAt(segmentId: string, boundary: RailBoundary, coordinateDirection: number): RailConnection[] {
+    const incoming = this.segments.get(segmentId);
+    if (!incoming) return [];
+    const at = pointAt(incoming, boundary.offset);
+    const before = pointAt(incoming, boundary.offset - Math.sign(coordinateDirection) * 10);
+    const incomingLength = distance(before, at);
+    return this.exitsAt(segmentId, boundary, coordinateDirection).map(exit => {
+      const next = this.segments.get(exit.segmentId)!;
+      const start = pointAt(next, exit.offset);
+      const after = pointAt(next, exit.offset + exit.direction * 10);
+      const gap = distance(at, start);
+      const outgoingLength = distance(start, after);
+      const angle = ((bearing(start, after) - bearing(before, at) + 540) % 360) - 180;
+      const interior = (boundary.offset > 0.000001 && boundary.offset < incoming.length - 0.000001) ||
+        (exit.offset > 0.000001 && exit.offset < next.length - 0.000001);
+      // A nearby endpoint is not proof of an attachment to an existing interior vertex.
+      const interiorGapUncertain = incoming.id !== exit.segmentId && interior && gap > APP_CONFIG.simulation.junctionInteriorMaxGap;
+      const a = incoming.properties, b = next.properties;
+      const conflict = a.layer !== b.layer || a.bridge !== b.bridge || a.tunnel !== b.tunnel;
+      const plausibleTransition = gap <= APP_CONFIG.simulation.junctionTransitionMaxGap &&
+        Math.abs(angle) <= APP_CONFIG.simulation.junctionTransitionMaxTurnDegrees &&
+        !(a.bridge && b.tunnel) && !(a.tunnel && b.bridge) && Math.abs(a.layer - b.layer) <= 1 &&
+        (a.bridge !== b.bridge || a.tunnel !== b.tunnel);
+      let reason = gap < 0.01 ? '原始坐标重合，方向连续性推定' : '距离容差内的派生连接';
+      if (incomingLength < 0.1 || outgoingLength < 0.1) reason = '切线长度不足';
+      else if (gap > APP_CONFIG.simulation.junctionTransitionMaxGap) reason = '端点存在间隙，无法确认物理连接';
+      else if (interiorGapUncertain) reason = '内部顶点与外部端点未重合，连接未确认';
+      else if (Math.abs(angle) >= APP_CONFIG.simulation.junctionMaxTurnDegrees) reason = '接近掉头，须停车换向';
+      else if (conflict && !plausibleTransition) reason = '层级或桥隧属性冲突，连接未确认';
+      else if (conflict) reason = '重合且走向连续的桥隧过渡，仍需核验';
+      const valid = incomingLength >= 0.1 && outgoingLength >= 0.1 && gap <= APP_CONFIG.simulation.junctionTransitionMaxGap && !interiorGapUncertain &&
+        Math.abs(angle) < APP_CONFIG.simulation.junctionMaxTurnDegrees && (!conflict || plausibleTransition);
+      return { ...exit, angle, gap, valid, reason, confidence: conflict || gap >= 0.01 ? 'uncertain' as const : 'derived' as const };
+    }).sort((a, b) => a.angle - b.angle || a.key.localeCompare(b.key));
+  }
+
+  drivableExits(segmentId: string, boundary: RailBoundary, direction: number): RailConnection[] {
+    return this.connectionsAt(segmentId, boundary, direction).filter(connection => connection.valid);
+  }
+
+  previewPath(first: RailConnection): { points: LonLat[]; length: number; stopReason: string; names: string[]; uncertain: boolean } {
+    const points: LonLat[] = [];
+    const names = new Set<string>();
+    const visited = new Set<string>();
+    let exit: RailExit = first, length = 0, uncertain = first.confidence === 'uncertain';
+    let stopReason = '节点数量上限';
+    for (let i = 0; i < APP_CONFIG.simulation.junctionPathMaxBoundaries; i++) {
+      if (visited.has(exit.key)) { stopReason = '检测到环路'; break; }
+      visited.add(exit.key);
+      const segment = this.segments.get(exit.segmentId);
+      if (!segment) { stopReason = '区段数据缺失'; break; }
+      if (segment.properties.name !== '未命名铁路') names.add(segment.properties.name);
+      const boundary = this.nextBoundary(segment.id, exit.offset, exit.direction);
+      if (!boundary) { stopReason = '线路数据边界'; break; }
+      const available = Math.abs(boundary.offset - exit.offset);
+      const step = Math.min(available, APP_CONFIG.simulation.junctionPathPreviewMeters - length);
+      const end = exit.offset + exit.direction * step;
+      if (!points.length) points.push(pointAt(segment, exit.offset));
+      const vertices = segment.cumulative.map((offset, index) => ({ offset, point: segment.points[index] }))
+        .filter(item => exit.direction > 0 ? item.offset > exit.offset && item.offset < end : item.offset < exit.offset && item.offset > end);
+      if (exit.direction < 0) vertices.reverse();
+      points.push(...vertices.map(item => item.point), pointAt(segment, end));
+      length += step;
+      if (step < available || length >= APP_CONFIG.simulation.junctionPathPreviewMeters) { stopReason = '预览距离上限'; break; }
+      const exits = this.drivableExits(segment.id, boundary, exit.direction);
+      if (exits.length !== 1) { stopReason = exits.length ? '下一处分岔' : '线路中断或数据边界'; break; }
+      uncertain ||= exits[0].confidence === 'uncertain';
+      exit = exits[0];
+    }
+    return { points, length, stopReason, names: [...names], uncertain };
   }
 
   private ensureAttachments(): void {
