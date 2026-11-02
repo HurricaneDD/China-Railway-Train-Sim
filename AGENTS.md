@@ -357,3 +357,8 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - 道岔预览改为两轴相同尺度，所选路径置顶；独立编号索引明确不表示真实股道位置。
 - 增加 `scripts/railway-diagnostics.ts`，可选单省生成几何度数、弱区段分量和有向过滤统计；不是实际可达性或真实道岔统计。验证及剩余问题见 `docs/DEVELOPMENT-STATE.md`。
 - 本轮 `npm test` 11 个文件、57 项通过，`npm run build` 通过。广州单省诊断及 390×844 可见浏览器中的道岔编号切换和确认检查结果见开发状态；未完成真实触屏或 20 km 实线驾驶。
+
+### 2026-11-02 — drive 分支 Pages 部署
+
+- GitHub Pages 工作流的 push 触发分支增加 `drive`，使道岔专项分支可以通过同一 Actions 工作流构建并部署；`main` 触发保持不变。
+- 推送该配置后需等待 GitHub Actions 的 build/deploy 完成，并直接访问 Pages 地址检查页面与初始界面；远端部署结果以本次 Actions 和实际浏览器检查为准。
