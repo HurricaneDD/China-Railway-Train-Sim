@@ -361,4 +361,5 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 ### 2026-11-02 — drive 分支 Pages 部署
 
 - GitHub Pages 工作流的 push 触发分支增加 `drive`，使道岔专项分支可以通过同一 Actions 工作流构建并部署；`main` 触发保持不变。
-- 推送该配置后需等待 GitHub Actions 的 build/deploy 完成，并直接访问 Pages 地址检查页面与初始界面；远端部署结果以本次 Actions 和实际浏览器检查为准。
+- 提交 `e34224f` 的 Actions run `41411284219` 中 build 与 deploy 均成功，但仓库 Pages 仍配置为 `build_type=legacy`、来源 `drive:/`；实际访问 `https://hurricanedd.github.io/China-Railway-Train-Sim/` 返回旧的开发入口 `/src/main.ts`，浏览器显示空白，不能视为部署验收通过。
+- 当前 GitHub 账号对仓库仅有 push 权限，切换 Pages 发布模式的 API 请求返回 404。需仓库管理员在 Settings → Pages → Build and deployment 将 Source 改为 **GitHub Actions**，随后重新运行 Deploy to GitHub Pages workflow，再检查线上首页和界面。
