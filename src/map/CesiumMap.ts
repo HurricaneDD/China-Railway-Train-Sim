@@ -1,5 +1,6 @@
 import {
-  Cartesian2, Cartesian3, Cartographic, Color, createWorldImageryAsync, createWorldTerrainAsync,
+  Cartesian2, Cartesian3, Cartographic, Color, ColorGeometryInstanceAttribute, EllipsoidTerrainProvider, GeometryInstance,
+  GroundPolylineGeometry, GroundPolylinePrimitive, PolylineColorAppearance, Rectangle, createWorldImageryAsync, createWorldTerrainAsync,
   HeadingPitchRange, Ion, LabelStyle, Math as CesiumMath, Matrix4, NearFarScalar,
   ScreenSpaceEventHandler, ScreenSpaceEventType, VerticalOrigin, Viewer,
 } from 'cesium';
@@ -9,10 +10,20 @@ import type { LonLat, RailSegment, Station } from '../types';
 import { RailRenderer } from './RailRenderer';
 import { TrainRenderer } from './TrainRenderer';
 import { offsetPoint } from '../utils/geo';
+import { withTimeout } from '../utils/assets';
 
 export class CesiumMap {
   viewer!: Viewer;
+  onStatus?: (message: string) => void;
+  onError?: (message: string) => void;
+  serviceStatus = '';
+  private disposed = false;
+  private serviceGeneration = 0;
+  private servicesLoading?: Promise<void>;
+  private removeRenderError?: () => void;
+  private imageryLoaded = false;
   private railRenderer!: RailRenderer;
+  private provinceRailway?: GroundPolylinePrimitive;
   private trainRenderer!: TrainRenderer;
   private handler?: ScreenSpaceEventHandler;
   private session?: GameSession;
@@ -29,7 +40,7 @@ export class CesiumMap {
 
   async initialize(container: HTMLElement): Promise<void> {
     Ion.defaultAccessToken = APP_CONFIG.cesiumIonToken;
-    const terrain = await createWorldTerrainAsync();
+    const terrain = new EllipsoidTerrainProvider();
     this.viewer = new Viewer(container, {
       baseLayer: false,
       terrainProvider: terrain,
@@ -46,8 +57,7 @@ export class CesiumMap {
       requestRenderMode: false,
       msaaSamples: 2,
     });
-    const imagery = await createWorldImageryAsync();
-    this.viewer.imageryLayers.addImageryProvider(imagery);
+    this.viewer.scene.globe.baseColor = Color.fromCssColorString('#253a31');
     this.session?.elevation.setProvider(this.viewer.terrainProvider);
     this.viewer.scene.globe.depthTestAgainstTerrain = true;
     this.viewer.scene.screenSpaceCameraController.minimumZoomDistance = APP_CONFIG.camera.minRange;
@@ -57,8 +67,56 @@ export class CesiumMap {
     this.railRenderer = new RailRenderer(this.viewer, this.session!.elevation);
     this.trainRenderer = new TrainRenderer(this.viewer);
     this.setupPicking();
+    this.removeRenderError = this.viewer.scene.renderError.addEventListener(() => {
+      if (this.session) this.session.paused = true;
+      this.onError?.('三维画面暂时中断，列车已暂停。请重试地图服务后继续驾驶。');
+    });
     this.previousTime = performance.now();
     this.animate();
+    void this.retryServices();
+  }
+
+  /** Optional online scenery never blocks entry into the simulator. */
+  retryServices(): Promise<void> {
+    if (this.servicesLoading) return this.servicesLoading;
+    this.servicesLoading = this.loadServices().catch(() => {
+      if (this.disposed) return;
+      this.serviceStatus = '地图服务恢复失败，请重试；当前驾驶进度已保留';
+      this.onStatus?.(this.serviceStatus);
+    }).finally(() => { this.servicesLoading = undefined; });
+    return this.servicesLoading;
+  }
+
+  private async loadServices(): Promise<void> {
+    const generation = ++this.serviceGeneration;
+    const current = () => !this.disposed && generation === this.serviceGeneration && !this.viewer.isDestroyed();
+    this.serviceStatus = '正在加载卫星影像和地形，可先选择车站';
+    this.onStatus?.(this.serviceStatus);
+    const results = await Promise.allSettled([
+      withTimeout(createWorldTerrainAsync(), 12_000, '地形服务连接超时'),
+      this.imageryLoaded ? Promise.resolve(undefined) : withTimeout(createWorldImageryAsync(), 12_000, '卫星影像连接超时'),
+    ]);
+    if (!current()) return;
+    const [terrain, imagery] = results;
+    if (terrain.status === 'fulfilled') {
+      this.viewer.terrainProvider = terrain.value;
+      this.session?.elevation.setProvider(terrain.value);
+    }
+    if (imagery.status === 'fulfilled' && imagery.value) {
+      this.viewer.imageryLayers.addImageryProvider(imagery.value);
+      this.imageryLoaded = true;
+    }
+    const unavailable = [terrain.status === 'rejected' ? '地形' : '', imagery.status === 'rejected' ? '卫星影像' : ''].filter(Boolean);
+    this.serviceStatus = unavailable.length ? `${unavailable.join('、')}暂不可用，已使用基础地球；可继续驾驶或重试` : '';
+    this.onStatus?.(this.serviceStatus);
+    this.viewer.useDefaultRenderLoop = true;
+    this.viewer.scene.requestRender();
+    const point = this.session?.currentPoint();
+    if (terrain.status === 'fulfilled' && point && this.session?.running) {
+      void this.renderRailway(this.session.railway.network.segmentsNear(point, APP_CONFIG.data.renderRadius)).catch(() => {
+        this.onStatus?.('地形已恢复，附近轨道将在下一次更新时重绘');
+      });
+    }
   }
 
   attachSession(session: GameSession): void {
@@ -66,10 +124,44 @@ export class CesiumMap {
   }
 
   async renderRailway(segments: RailSegment[]): Promise<void> {
-    await this.railRenderer.render(segments);
+    this.clearProvinceRailway();
+    await this.railRenderer.render(segments, this.session?.currentPoint());
+  }
+
+  // Overview uses the original WGS84 vertices, with no straight-line joins between parts.
+  showProvinceRailway(segments: RailSegment[]): void {
+    this.clearProvinceRailway();
+    this.railRenderer.clear();
+    if (!segments.length) return;
+    let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity;
+    const geometryInstances = segments.map((segment) => {
+      const positions = segment.points.map((point) => {
+        west = Math.min(west, point.lon); east = Math.max(east, point.lon);
+        south = Math.min(south, point.lat); north = Math.max(north, point.lat);
+        return Cartesian3.fromDegrees(point.lon, point.lat);
+      });
+      return new GeometryInstance({
+        geometry: new GroundPolylineGeometry({ positions, width: 2 }),
+        attributes: { color: ColorGeometryInstanceAttribute.fromColor(Color.fromCssColorString('#d8ff62')) },
+      });
+    });
+    this.provinceRailway = this.viewer.scene.groundPrimitives.add(new GroundPolylinePrimitive({
+      geometryInstances,
+      appearance: new PolylineColorAppearance(),
+      allowPicking: false,
+    }));
+    this.cameraTarget = undefined;
+    this.viewer.camera.lookAtTransform(Matrix4.IDENTITY);
+    this.viewer.camera.flyTo({ destination: Rectangle.fromDegrees(west - 0.1, south - 0.1, east + 0.1, north + 0.1), duration: 1.2 });
+  }
+
+  private clearProvinceRailway(): void {
+    if (this.provinceRailway && !this.viewer.isDestroyed()) this.viewer.scene.groundPrimitives.remove(this.provinceRailway);
+    this.provinceRailway = undefined;
   }
 
   clearRailway(): void {
+    this.clearProvinceRailway();
     this.railRenderer.clear();
   }
 
@@ -126,7 +218,14 @@ export class CesiumMap {
   }
 
   destroy(): void {
+    this.disposed = true;
+    this.serviceGeneration++;
     cancelAnimationFrame(this.animationFrame);
+    this.removeRenderError?.();
+    if (this.viewer && !this.viewer.isDestroyed()) {
+      this.railRenderer?.clear();
+      this.clearProvinceRailway();
+    }
     this.handler?.destroy();
     if (this.viewer && !this.viewer.isDestroyed()) this.viewer.destroy();
   }
@@ -152,6 +251,7 @@ export class CesiumMap {
   }
 
   private animate = (): void => {
+    if (this.disposed || this.viewer.isDestroyed()) return;
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.previousTime) / 1000);
     this.previousTime = now;

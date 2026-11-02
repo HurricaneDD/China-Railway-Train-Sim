@@ -3,12 +3,13 @@ import type { GameSession } from '../core/session';
 import type { Reverser } from '../types';
 
 const props = defineProps<{ session: GameSession; updateKey: number; cameraRange: number; cameraMode: 'cab' | 'external' }>();
-const emit = defineEmits<{ menu: []; save: []; settings: []; reverser: [value: Reverser]; horn: [held: boolean]; sand: []; camera: [range: number]; view: []; }>();
+const emit = defineEmits<{ menu: []; save: []; settings: []; reverser: [value: Reverser]; horn: [held: boolean]; sand: []; camera: [range: number]; view: []; pause: []; help: []; parking: []; retry: []; }>();
 void props.updateKey;
 
 function lineName(): string {
   if (!props.session.position) return '未定位';
-  return props.session.railway.network.segments.get(props.session.position.segmentId)?.properties.name ?? '未命名铁路';
+  const name = props.session.railway.network.segments.get(props.session.position.segmentId)?.properties.name;
+  return !name || name === '未命名铁路' ? '未识别轨道' : name;
 }
 function provinceName(): string {
   return props.session.position?.province ?? '';
@@ -32,6 +33,8 @@ function direction(value: Reverser): void {
     <header class="drive-topbar">
       <div class="drive-brand"><span class="brand-mark small">CR</span><div><strong>国铁列车驾驶模拟器</strong><small>{{ provinceName() }} · {{ lineName() }}</small></div></div>
       <div class="topbar-actions">
+        <button @click="$emit('pause')">{{ session.paused ? '继续' : '暂停' }}</button>
+        <button @click="$emit('help')">操作说明</button>
         <button class="view-toggle" @click="$emit('view')">{{ cameraMode === 'cab' ? '切换外部视角' : '返回驾驶室' }}</button>
         <button @click="$emit('save')">保存进度</button>
         <button @click="$emit('settings')">设置</button>
@@ -39,6 +42,17 @@ function direction(value: Reverser): void {
       </div>
     </header>
 
+    <section class="journey-strip" aria-label="行程信息">
+      <span><small>本次行驶</small><strong>{{ ((session.position?.travelled ?? 0) / 1000).toFixed(2) }} km</strong></span>
+      <span><small>运行时间</small><strong>{{ Math.floor(session.elapsed / 60) }}:{{ String(Math.floor(session.elapsed % 60)).padStart(2, '0') }}</strong></span>
+      <span v-if="session.nearestStation"><small>邻近车站 · 直线</small><strong>{{ session.nearestStation.name }} · {{ (session.nearestStation.distance / 1000).toFixed(1) }} km</strong></span>
+      <span class="journey-practice"><small>自由驾驶练习</small><strong>{{ session.practiceComplete ? '✓ 已完成 1 km 后停稳' : (session.position?.travelled ?? 0) >= 1000 ? '已满 1 km · 尝试停稳' : '行驶 1 km 后停稳' }}</strong></span>
+    </section>
+    <div v-if="session.loadingBorder || session.routeEnd" class="route-status" role="status">
+      {{ session.loadingBorder ? '正在检查相邻省份线路，已暂停推进…' : '前方线路中断或连接未确认 · 可换向后退或返回选站' }}
+      <button v-if="session.routeEnd && !session.loadingBorder" @click="$emit('retry')">重新检查前方线路</button>
+    </div>
+    <div v-else-if="session.connectionWarning" class="route-status" role="status">{{ session.connectionWarning }}</div>
     <section class="speed-cluster">
       <p>当前速度 <span>SPEED</span></p>
       <div><strong>{{ Math.abs(session.train.velocity * 3.6).toFixed(1) }}</strong><span>km/h</span></div>
@@ -48,7 +62,7 @@ function direction(value: Reverser): void {
     <aside class="telemetry">
       <div class="telemetry-title">运行状态 <span class="live-tag">LIVE</span></div>
       <dl>
-        <div><dt>线路坡度</dt><dd :class="session.train.slope > 0.0005 ? 'warning-text' : ''">{{ (session.train.slope * 1000).toFixed(1) }} ‰</dd></div>
+        <div><dt>线路坡度</dt><dd :class="session.train.slope > 0.0005 ? 'warning-text' : ''">{{ (session.train.slope * 1000 * (Math.sign(session.train.velocity) || session.train.reverser || 1)).toFixed(1) }} ‰</dd></div>
         <div><dt>列车管压力</dt><dd>{{ session.train.brakePipe.toFixed(0) }} kPa</dd></div>
         <div><dt>轮轨黏着</dt><dd :class="session.train.adhesionLimited ? 'warning-text' : 'ok-text'">{{ session.train.adhesionLimited ? '黏着不足' : '正常' }}</dd></div>
         <div><dt>撒砂状态</dt><dd>{{ session.train.sandRemaining > 0 ? `${session.train.sandRemaining.toFixed(1)} s` : '未启用' }}</dd></div>
@@ -65,11 +79,11 @@ function direction(value: Reverser): void {
         <div class="key-hint"><kbd>Shift</kbd> 增加 <kbd>Ctrl</kbd> 减小</div>
       </div>
       <div class="handle-control brake-control">
-        <div class="control-label"><span>制动</span><strong>{{ session.train.brakeActual.toFixed(0) }}<small>%</small></strong></div>
+        <div class="control-label"><span>制动 {{ session.parkingBrake ? '· 驻车' : '' }}</span><strong>{{ session.train.brakeActual.toFixed(0) }}<small>%</small></strong></div>
         <button class="brake-button" :class="{ engaged: session.brakeHeld }" @pointerdown.prevent="session.brakeHeld = true" @pointerup="session.brakeHeld = false" @pointerleave="session.brakeHeld = false" @pointercancel="session.brakeHeld = false">
           <span>{{ session.brakeHeld ? '制动施加中' : '按住制动' }}</span><i :style="{ width: `${session.train.brakeActual}%` }" />
         </button>
-        <div class="key-hint"><kbd>Space</kbd> 按住施加 · 松开缓解</div>
+        <div class="brake-footer"><span class="key-hint"><kbd>Space</kbd> 按住施加 · 松开缓解</span><button class="parking-toggle" :class="{ active: session.parkingBrake }" @click="$emit('parking')">{{ session.parkingBrake ? '松开驻车' : '启用驻车' }}</button></div>
       </div>
       <div class="reverser-control">
         <span class="control-caption">换向器</span>

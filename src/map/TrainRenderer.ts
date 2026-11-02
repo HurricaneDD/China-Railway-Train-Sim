@@ -17,7 +17,8 @@ export class TrainRenderer {
         position: new CallbackPositionProperty(() => this.positions[index], false, ReferenceFrame.FIXED),
         orientation: new CallbackProperty(() => this.orientations[index], false),
         box: {
-          dimensions: new Cartesian3(vehicle.width, vehicle.length, vehicle.height),
+          // Cesium HPR aligns local X with the track heading; X must be the long axis.
+          dimensions: new Cartesian3(vehicle.length, vehicle.width, vehicle.height),
           material: index === 0 ? Color.fromCssColorString('#b9e3b0') : Color.fromCssColorString('#315b45'),
           outline: true,
           outlineColor: Color.fromCssColorString('#15251c'),

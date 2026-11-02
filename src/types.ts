@@ -87,12 +87,21 @@ export interface JunctionOption {
   bearing: number;
   direction: string;
   nextStation: string;
+  angle: number;
+  preview: LonLat[];
+  previewLength: number;
+  stopReason: string;
+  confidence: 'derived' | 'uncertain';
+  reason: string;
 }
 
 export interface JunctionRequest {
   nodeId: string;
   atSegmentEnd: boolean;
   options: JunctionOption[];
+  currentName: string;
+  incomingBearing: number;
+  diagnostics: unknown;
 }
 
 export type Reverser = -1 | 0 | 1;
