@@ -268,6 +268,7 @@ Token 集中在 `src/config.ts` 的 `APP_CONFIG.cesiumIonToken`，初始化时�
 | 上行/下行推定 | 以轨道前进方向与“车站→北京”方位夹角 ≤90° 判为上行，只决定初始朝向；不新增存档字段、不代表真实行别或调度，线路实际行别可能相反。 |
 | 平行股道在配线图重叠 | 编号沿线路错位绘制、点击按 14 px 命中，右侧列表为准；两条线完全重合时图上不可分辨。 |
 | 列表滚动定位 | 滚动容器需 `position: relative`，否则 `offsetTop` 相对 fixed 背景，会滚到错误位置；车站与道岔列表均已修正。 |
+| 在 `v-if`/`v-else` 链中插入组件 | 新增弹窗若插在 `StartMenu`/workspace 与 `DrivingHud` 的 `v-else` 之间，会破坏条件链，导致开始页也渲染驾驶 HUD；弹窗必须放在整条 `v-if`/`v-else-if`/`v-else` 链之后。 |
 | 多页面构建 | `vite.config.ts` 必须同时列出主应用和 `dev/railway-check/index.html`；只加 HTML 不加 rollup 输入不会产出检查页。 |
 | 倍速直接乘物理 `dt` | 会改变动力学积分和事件判定；应放大累加器并继续按 1/60 s 固定步长 tick，限制每帧最大步数，切速清空积压。 |
 | 同名线路不代表同一要素 | 去重使用 osm_id + layer，不按名称删除。 |
@@ -509,4 +510,5 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - `npm test`：15 个测试文件、78 项通过；新增 `tests/station-departure.test.ts` 7 项，覆盖股道距离排序、上下行方向推定、650 m 窗口、60 条截断、指定股道方向/朝向与非法区段。`npm run build` 通过。
 - 开发服务器 + headless Chromium 实测：南京南显示 60 条可选股道；点击配线图青色线路命中第 20 条“京沪高铁”，右侧同步选中并滚动到该行；切下行后箭头由东北翻为西南；确认后 HUD 出现“已从南京南站下行方向始发”，列车驻车。另验证“显示更多”24→48→60、390×844 布局可滚动到方向和股道列表，控制台无应用错误。
 - 同一轮从南京南按新流程始发，以 20× 和满牵引行驶约 7 秒自然触发真实道岔：道岔弹窗显示 2 条候选、卫星底图、比例尺与归属，确认共享 `canvasLayer.ts` 重构未破坏原道岔配线图；控制台无应用错误。
+- 修正开始页/新游戏面板误显示驾驶 HUD：`StationDepartureDialog` 原先插在 `StartMenu`/workspace 的 `v-if` 与 `DrivingHud` 的 `v-else` 之间，破坏相邻条件链，使 `v-else` HUD 始终渲染。已把弹窗移到 `DrivingHud` 之后；浏览器实测开始页、新游戏面板、车站始发弹窗的 `.driving-ui` 数量均为 0，确认始发后为 1，控制台无错误。
 - 正式 `data/` 未修改；`output/` 下脚本与截图不进入版本控制。已知限制见第 9 节及 `docs/DEVELOPMENT-STATE.md`。
