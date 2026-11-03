@@ -8,8 +8,11 @@
 
 ```bash
 npm run dev
-# http://localhost:5173/dev/raliway-check/
+# http://localhost:8062/dev/raliway-check/
+# 外部访问示例：http://fangxx.fun:8062/dev/raliway-check/
 ```
+
+末尾的 `/` 不能省略。开发服务器会对 `/dev/raliway-check`（无尾斜杠）返回 302 跳转到带斜杠地址；若使用旧进程或把该路径交给普通静态服务器的 SPA 回退，可能显示主应用首页。主应用的“设置 → 数据来源与许可”也提供入口。
 
 生产构建会把页面输出到 `dist/dev/raliway-check/index.html`。该页面不加载 Cesium；`vite.config.ts` 中的 `railway-check-html` 插件会移除 Cesium 插件注入到该嵌套页面的静态标签，避免相对路径 404。
 

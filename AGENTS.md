@@ -26,6 +26,8 @@ npm test          # Vitest 核心逻辑测试
 npm run preview   # 本地预览 dist，仅用于开发验证
 ```
 
+`npm run dev` 默认监听 `0.0.0.0:8062`（`strictPort`），并通过 `server.allowedHosts: true` 允许外部域名/反向代理访问；该设置仅影响开发服务器，不改变生产构建产物。当前开发机的常驻服务由 Docker 容器 `crts-dev-8062` 提供（`--restart unless-stopped`，映射 `0.0.0.0:8062`）；DSH 会话级后台任务会在对话结束后被回收，不能作为长期服务。
+
 主要版本：
 
 | 依赖 | 版本 |
@@ -191,7 +193,7 @@ China-Railway-Train-Sim-Kimi/
 
 ### 4.9 线路人工检查
 
-- 页面位于 `dev/raliway-check/`，开发地址 `/dev/raliway-check/`，构建输出 `dist/dev/raliway-check/index.html`。它是只读工具，不修改正式数据、不写存档、不参与驾驶。
+- 页面位于 `dev/raliway-check/`，开发地址 `http://<host>:8062/dev/raliway-check/`（末尾 `/` 不可省略），构建输出 `dist/dev/raliway-check/index.html`。开发服务器对无尾斜杠的 `/dev/raliway-check` 返回 302；否则 Vite SPA 回退会返回主应用首页。主应用“设置 → 数据来源与许可”也提供入口。该页是只读工具，不修改正式数据、不写存档、不参与驾驶。
 - `analysis.ts` 复用 `RailNetwork.boundariesOf/connectionsAt/segmentsNear`，按省统计：无可行驶出边的断点组、被过滤的非掉头候选、100 m 内最近线路、桥/隧区段、弱连通分量。
 - 断点分类：红色 `filtered`（有被拒候选）、橙色 `nearby`（100 m 内有其它线路）、灰色 `isolated`（100 m 内没有其它线路）。接近掉头的候选不列为断点，因为应由换向处理。
 - `RailwayMap.vue` 使用 2D Canvas 绘制原始区段（普通/桥/隧分色）和断点；`Inspector.vue` 负责分省加载、筛选、详情、复制坐标/JSON 和导出。`加载邻省` 会把相邻省份加入同一 `RailNetwork`，本次会话内不卸载。
@@ -417,3 +419,16 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - 新增 `dev/raliway-check/` 分省只读检查页：普通/桥/隧分色，红色标出被过滤断点、橙色标近邻未接入、灰色标孤立端点；可加载邻省、查看来路/候选角度/间隙/OSM ID、复制坐标/JSON、导出本省报告。Vite 多页面构建，检查页不加载 Cesium；数据路径通过注入 `JsonFetcher` 解析，避免嵌套页面 BASE_URL 错误。
 - `npm test` 12 文件 63 项通过；`npm run build` 通过。开发服务器和静态 `dist` 均实际打开检查页；江苏加载 9,839 区段、1,728 个断点组、280 条被过滤连接；加载 5 省后断点 1,660、弱分量 91。主应用南京南进入驾驶并选中 20×，模拟时间按倍速推进；headless SwiftShader 的 WebGL 警告未作为视觉验收。
 - 正式 `data/` 未修改；未完成逐省人工核对、真实长途 20× 驾驶、真实触屏和 GitHub Pages 线上验收。详见 `docs/RAILWAY-TOPOLOGY.md`、`docs/DEVELOPMENT-STATE.md` 和 `dev/raliway-check/README.md`。
+
+### 2026-11-03 — 开发服务器外部 Host 放行
+
+- `vite.config.ts` 增加 `server.host: '0.0.0.0'`、`server.port: 8062`、`server.strictPort: true` 和 `server.allowedHosts: true`，允许通过 `fangxx.fun` 等外部域名、IP 或反向代理访问开发服务器；该配置只影响 `vite dev`，不改变生产构建、正式数据或存档。
+- 在 8062 端口重启后验证：`0.0.0.0:8062` 监听正常；本机、局域网和 `http://fangxx.fun:8062/` 均返回 200；伪造 `Host: fangxx.fun` 请求不再被 Vite 拦截。`npm run build` 通过。
+- 发现 DSH 会话级后台任务会在对话结束后被回收，导致 8062 中断；改用 Docker 容器 `crts-dev-8062`（Node 22.23.4，绑定工作区，`--restart unless-stopped`，映射 `0.0.0.0:8062`）常驻。验证本机、局域网、`http://fangxx.fun:8062/`、分省数据与检查页均返回 200。
+
+### 2026-11-03 — 检查页入口修正
+
+- 修正用户反馈“访问检查页却像主应用首页”：无尾斜杠的 `/dev/raliway-check` 会落入 Vite SPA 回退，返回主应用 `index.html`。`vite.config.ts` 的开发中间件现在对该路径返回 302 到 `/dev/raliway-check/`，查询参数保留；本机和 `http://fangxx.fun:8062/dev/raliway-check` 实测均跳转成功。
+- `SettingsPanel.vue` 的“数据来源与许可”增加“打开检查页 ↗”链接，直接指向 `./dev/raliway-check/`，生产子路径下同样可用。
+- `dev/raliway-check/README.md` 更新为 8062 端口并强调末尾斜杠。
+- 验证：`curl` 确认 302 和跳转后的标题为“线路人工检查”；`npm run build` 通过（检查页仍不含 Cesium 标签）。

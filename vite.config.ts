@@ -9,6 +9,18 @@ function railwayData(): Plugin {
   return {
     name: 'railway-data',
     configureServer(server) {
+      // A missing trailing slash would otherwise fall through to Vite's SPA
+      // fallback and open the main simulator instead of the inspector.
+      server.middlewares.use((req, res, next) => {
+        const url = new URL(req.url ?? '/', 'http://localhost');
+        if (url.pathname === '/dev/raliway-check') {
+          res.statusCode = 302;
+          res.setHeader('Location', `/dev/raliway-check/${url.search}`);
+          res.end();
+          return;
+        }
+        next();
+      });
       server.middlewares.use(async (req, res, next) => {
         if (!req.url?.startsWith('/data/')) return next();
         const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
@@ -61,6 +73,14 @@ export default defineConfig({
   publicDir: false,
   plugins: [vue(), cesium(), railwayCheckHtml(), railwayData()],
   resolve: { alias: { '@': resolve(__dirname, 'src') } },
+  server: {
+    host: '0.0.0.0',
+    port: 8062,
+    strictPort: true,
+    // Allow reverse proxies and external hostnames to reach the dev server.
+    // This only affects `vite dev`; production output is unaffected.
+    allowedHosts: true,
+  },
   build: {
     target: 'es2022',
     chunkSizeWarningLimit: 5000,

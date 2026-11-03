@@ -13,7 +13,7 @@ defineEmits<{ close: []; change: [settings: GameSettings] }>();
       <label class="range-setting"><span><strong>默认观察距离</strong><b>{{ settings.cameraRange }} m</b></span><input type="range" min="35" max="900" step="5" :value="settings.cameraRange" @input="$emit('change', { ...settings, cameraRange: Number(($event.target as HTMLInputElement).value) })" /></label>
       <label class="range-setting"><span><strong>轨道显示范围</strong><b>{{ (settings.renderRadius / 1000).toFixed(1) }} km</b></span><input type="range" min="2000" max="10000" step="500" :value="settings.renderRadius" @input="$emit('change', { ...settings, renderRadius: Number(($event.target as HTMLInputElement).value) })" /></label>
       <div class="keyboard-guide"><h3>键盘操作</h3><div><span><kbd>Shift</kbd> 增加牵引</span><span><kbd>Ctrl</kbd> 减小牵引</span><span><kbd>Space</kbd> 制动 / 缓解</span><span><kbd>H</kbd> 鸣笛</span><span><kbd>X</kbd> 撒砂</span><span>鼠标拖动 / 滚轮 视角</span></div></div>
-      <details class="data-credits"><summary>数据来源与许可</summary><p>车站资料来自 12306 车站地址接口；铁路几何来自 OpenStreetMap 贡献者，遵循 ODbL 1.0。原始数据整理自 CRTrainRoute（MIT License）。车站和线路均使用 WGS84 坐标。</p><p>本应用不包含虚构全国限速。地形坡度来自 Cesium ion，仅用于第一版估算，不等同于真实铁路纵断面。</p></details>
+      <details class="data-credits"><summary>数据来源与许可</summary><p>车站资料来自 12306 车站地址接口；铁路几何来自 OpenStreetMap 贡献者，遵循 ODbL 1.0。原始数据整理自 CRTrainRoute（MIT License）。车站和线路均使用 WGS84 坐标。</p><p>本应用不包含虚构全国限速。地形坡度来自 Cesium ion，仅用于第一版估算，不等同于真实铁路纵断面。</p><p>线路人工检查（只读开发工具）：<a href="./dev/raliway-check/" target="_blank" rel="noopener">打开检查页 ↗</a></p></details>
     </div>
   </section>
 </template>

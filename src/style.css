@@ -208,6 +208,7 @@ kbd { display: inline-block; min-width: 19px; padding: 2px 5px; border: 1px soli
 .keyboard-guide > div { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; color: var(--muted); font-size: 9px; }
 .data-credits { border-top: 1px solid var(--line); padding-top: 18px; color: var(--muted); font-size: 10px; line-height: 1.8; }
 .data-credits summary { color: #d6dcd2; cursor: pointer; }
+.data-credits a { color: var(--accent); text-underline-offset: 2px; }
 .junction-backdrop { z-index: 20; background: rgba(5,7,5,.55); }
 .junction-dialog { width: 540px; max-width: 100%; padding: 30px; border: 1px solid var(--accent); background: #151815; box-shadow: 0 0 80px rgba(216,255,98,.08); text-align: center; }
 .junction-icon { color: var(--accent); font-size: 42px; }
