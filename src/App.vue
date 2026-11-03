@@ -127,6 +127,11 @@ async function loadSave(save: GameSave): Promise<void> {
 }
 
 async function newGame(): Promise<void> {
+  // Clear any leftover modal state from a previous attempt before leaving the menu.
+  departure.value = null;
+  overlay.value = null;
+  selectingMap.value = false;
+  showHelp.value = false;
   screen.value = 'new';
   await selectProvince(selectedProvince.value || '江苏省');
 }

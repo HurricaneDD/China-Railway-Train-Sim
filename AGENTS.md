@@ -510,5 +510,5 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - `npm test`：15 个测试文件、78 项通过；新增 `tests/station-departure.test.ts` 7 项，覆盖股道距离排序、上下行方向推定、650 m 窗口、60 条截断、指定股道方向/朝向与非法区段。`npm run build` 通过。
 - 开发服务器 + headless Chromium 实测：南京南显示 60 条可选股道；点击配线图青色线路命中第 20 条“京沪高铁”，右侧同步选中并滚动到该行；切下行后箭头由东北翻为西南；确认后 HUD 出现“已从南京南站下行方向始发”，列车驻车。另验证“显示更多”24→48→60、390×844 布局可滚动到方向和股道列表，控制台无应用错误。
 - 同一轮从南京南按新流程始发，以 20× 和满牵引行驶约 7 秒自然触发真实道岔：道岔弹窗显示 2 条候选、卫星底图、比例尺与归属，确认共享 `canvasLayer.ts` 重构未破坏原道岔配线图；控制台无应用错误。
-- 修正开始页/新游戏面板误显示驾驶 HUD：`StationDepartureDialog` 原先插在 `StartMenu`/workspace 的 `v-if` 与 `DrivingHud` 的 `v-else` 之间，破坏相邻条件链，使 `v-else` HUD 始终渲染。已把弹窗移到 `DrivingHud` 之后；浏览器实测开始页、新游戏面板、车站始发弹窗的 `.driving-ui` 数量均为 0，确认始发后为 1，控制台无错误。
+- 修正开始页/新游戏面板误显示驾驶 HUD 及开始按钮被遮挡：`StationDepartureDialog` 原先插在 `StartMenu`/workspace 的 `v-if` 与 `DrivingHud` 的 `v-else` 之间，破坏相邻条件链，使 `v-else` HUD 始终渲染。已把弹窗移到 `DrivingHud` 之后，并把 `.start-screen` 层级提高到 HUD 之上；`newGame` 进入前清理残留的始发弹窗、设置/存档浮层和地图选点状态。浏览器实测 127.0.0.1 与 `fangxx.fun:8062` 的开始按钮均可用（`elementFromPoint` 命中按钮本身），开始页、新游戏面板、始发弹窗的 `.driving-ui` 数量为 0，确认始发后为 1，控制台无错误。
 - 正式 `data/` 未修改；`output/` 下脚本与截图不进入版本控制。已知限制见第 9 节及 `docs/DEVELOPMENT-STATE.md`。
