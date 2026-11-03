@@ -33,6 +33,8 @@ describe('检查页 WGS84 / Web Mercator 底图坐标', () => {
     expect(BASEMAPS.street.tileUrl(10, 845, 417)).toContain('World_Street_Map/MapServer/tile/10/417/845');
     expect(BASEMAPS.satellite.tileUrl(10, 845, 417)).toContain('World_Imagery/MapServer/tile/10/417/845');
     expect(BASEMAPS.street.attribution).toContain('OpenStreetMap');
+    expect(BASEMAPS.plain.tileUrl(10, 845, 417)).toContain('tile.openstreetmap.org/10/845/417');
+    expect(BASEMAPS.plain.attribution).toContain('OpenStreetMap');
     expect(BASEMAPS.satellite.attribution).toContain('Esri');
   });
 });

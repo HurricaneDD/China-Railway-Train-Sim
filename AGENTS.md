@@ -12,7 +12,7 @@
 - 架构：Vue 3 + TypeScript + Vite + CesiumJS 的纯前端静态应用。
 - 运行与存档均在浏览器本地完成；无后端、无账号、无云数据库、无 Cookie 进度。
 - 部署目标：GitHub Pages 仓库子路径。Vite `base` 为 `./`，不硬编码仓库名。
-- 当前版本：Demo 0.2（全国自由驾驶）+ 线路人工检查工具；存档结构继续使用 V1；首次开发日期 2026-11-01。
+- 当前版本：Demo 0.2（全国自由驾驶 + 车站线路图选线/方向）+ 线路人工检查工具；存档结构继续使用 V1；首次开发日期 2026-11-01。
 
 ## 2. 开发命令与依赖
 
@@ -85,10 +85,13 @@ China-Railway-Train-Sim-Kimi/
 │  │  ├─ DrivingHud.vue          速度、坡度、制动、黏着、换向等 HUD
 │  │  ├─ JunctionDialog.vue      宽屏道岔选择：左侧配线图、右侧线路选项
 │  │  ├─ JunctionMap.vue         道岔二维配线图、Esri 底图与直接点线选择
+│  │  ├─ StationDepartureDialog.vue  车站始发：线路点击、方向选择与最近线路快捷出发
+│  │  ├─ StationDepartureMap.vue     车站线路图：缩放/平移、卫星/普通底图与选线
 │  │  ├─ SavePanel.vue           读取、删除、导入、导出和手动保存
 │  │  └─ SettingsPanel.vue       设置、键位说明、数据来源与许可
 │  ├─ data/
 │  │  ├─ stations.ts             车站读取、筛选、搜索、pending 处理
+│  │  ├─ stationDeparture.ts     车站周边可选线路快照（无编号、无拓扑计算）
 │  │  └─ railway.ts              分省加载、GeoJSON 适配、空间索引、派生拓扑
 │  ├─ core/
 │  │  ├─ session.ts              固定步长循环、线路推进、分岔、编组路径历史
@@ -113,7 +116,8 @@ China-Railway-Train-Sim-Kimi/
 │  ├─ storage.test.ts            错误存档拒绝
 │  ├─ railway-check.test.ts      检查页断点分类、间隙与桥隧过渡
 │  ├─ mercator.test.ts           WGS84/Web Mercator 投影与底图 URL
-│  ├─ junction-map.test.ts       道岔配线图等比适配、线路命中与路径取点
+│  ├─ junction-map.test.ts       道岔配线图等比适配、线路命中、路径取点与缩放
+│  ├─ station-departure.test.ts  车站线路快照、方向与指定线路始发
 │  └─ ...                        拓扑、会话、渲染、全国回归
 ```
 
@@ -218,6 +222,17 @@ China-Railway-Train-Sim-Kimi/
 - 候选线路以青色绘制并在约 66% 路径处编号。点击画布时以 14 px 屏幕阈值命中最近的候选折线，选择结果与右侧选项双向同步；选中线路以荧光绿粗线、发光暗边和连续方向箭头标记，右侧卡片同步高亮，确认后沿用原有 `chooseJunction` 逻辑。
 - 底图瓦片缓存上限 480，CORS 使用 `anonymous`，离开弹窗后取消重绘。该地图没有平移/缩放控件，始终自动适配全部候选预览，避免把拖动误判成选线。
 
+### 4.11 车站始发：线路图、方向与最近线路
+
+- “车站出发”点击有坐标车站后打开 `StationDepartureDialog.vue`，先显示车站周边线路图，再由玩家点击一条线路并选择地理方向，确认后调用 `GameSession.startOnTrack` 放置列车；地图选点仍保持原有的直接吸附出发。
+- 数据快照 `src/data/stationDeparture.ts` 只使用 `segmentsNear`/`nearestOnSegment` 读取车站 1,500 m 内最多 240 条原始国铁线路，每条显示折线截取最近点两侧各 900 m。**不调用 `nextBoundary`/`drivableExits`**，因此不会为弹窗触发全网络 `ensureAttachments`；实测 10 省 99,635 区段时快照构建约 6 ms。
+- 不计算站场、股道或编号：线路只显示 OSM 名称（无名称时为“未命名线路”），不生成“01/02”等编号，也不推断正线/侧线、站台或连接关系。最近线路快捷出发使用距车站最近的一条原始线路，界面明确提示它不一定是正线。
+- 方向不从数据推断上下行：选中线路后可选择沿原始坐标前进/后退两个方向，界面按 `compassDirection` 显示“向东北”“向西南”等地理方位和角度；若数据无法判定行别就完全不使用“上行/下行”文案。方向只决定初始 `SavePosition.direction` 和地图箭头，存档仍为 V1。
+- `StationDepartureMap.vue` 使用 2D Canvas + 标准 Web Mercator，支持卫星（Esri World Imagery）和普通（OpenStreetMap）两种底图；鼠标滚轮以光标为锚点缩放，＋/－/复位按钮缩放，拖动平移。点击选线按 14 px 屏幕阈值命中，拖动超过 3 px 不触发选择；选中线路以荧光绿绘制，并按所选方向绘制箭头。
+- 出发位置取所选线路距站最近点；列车以驻车、全制动、1× 倍速开始。确认后立即提示“已从车站出发 · 向…”，不等待三维轨道绘制完成。
+- 普通底图使用 OpenStreetMap 标准瓦片（WGS84/EPSG:3857，归属 © OpenStreetMap contributors）；Esri World Street Map 在本项目实测的高缩放站区显示 “Map data not yet available”，因此没有用于车站线路图。检查页和道岔图仍使用原有 Esri 街道/卫星底图。
+
+
 ## 5. GitHub Pages 构建与部署
 
 1. 仓库 GitHub Settings → Pages → Source 选择 **GitHub Actions**。
@@ -250,6 +265,10 @@ Token 集中在 `src/config.ts` 的 `APP_CONFIG.cesiumIonToken`，初始化时�
 | 道岔配线图与真实拓扑 | `JunctionRequest.context` 是弹窗打开时的显示快照，只能画图/命中选择；不能据此新增行驶出口、判定连通或写入存档。可行驶性仍只由 `connectionsAt`/`drivableExits` 决定。 |
 | 道岔图点击与拖动冲突 | 点击候选线按屏幕像素距离命中，阈值 14 px；底图地图不提供平移/缩放，避免拖动被当成选择。相近线路完全重合时使用右侧列表，不能声称图上可分辨。 |
 | 列表滚动定位 | 滚动容器需 `position: relative`，否则 `offsetTop` 相对 fixed 背景，会滚到错误位置；道岔列表已修正。 |
+| 车站线路图与编号 | 不生成站场/股道编号，也不推断上下行；方向只按地理方位显示。线路名称来自 OSM，无名称时用“未命名线路”。 |
+| 车站线路图触发拓扑 | 车站快照只允许局部几何；调用 `nextBoundary`/`drivableExits` 会触发全网络 `ensureAttachments`，多省已加载时可达数秒至数十秒。 |
+| 车站线路图拖动与选线 | 拖动超过 3 px 不得触发选线；点击按 14 px 命中，缩放以光标为锚点，平移按像素/比例换算。 |
+| 普通底图高缩放覆盖 | Esri World Street Map 在站区高缩放可能返回 “Map data not yet available”，车站“普通”改用 OpenStreetMap 标准瓦片并保留归属；不得改用 GCJ-02 底图。 |
 | 在 `v-if`/`v-else` 链中插入组件 | 新增弹窗若插在 `StartMenu`/workspace 与 `DrivingHud` 的 `v-else` 之间，会破坏条件链，导致开始页也渲染驾驶 HUD；弹窗必须放在整条 `v-if`/`v-else-if`/`v-else` 链之后。 |
 | 多页面构建 | `vite.config.ts` 必须同时列出主应用和 `dev/railway-check/index.html`；只加 HTML 不加 rollup 输入不会产出检查页。 |
 | 倍速直接乘物理 `dt` | 会改变动力学积分和事件判定；应放大累加器并继续按 1/60 s 固定步长 tick，限制每帧最大步数，切速清空积压。 |
@@ -318,6 +337,9 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - 检查页底图依赖 Esri 在线瓦片，离线或服务不可用时显示提示并回退到深色网格；未内置离线瓦片缓存。底图只做显示，不参与距离和拓扑计算。
 - 道岔配线图依赖同一个 Esri 在线服务，底图失败时仍显示 WGS84 线路；弹窗没有底图离线包、平移或缩放。附近区段快照限制为节点周围 2 km、最多 320 条，候选预览最多 2 km，超出范围的股道不会显示。
 - 道岔图上的线路点击只按屏幕距离吸附到已有候选，不能从底图或邻近股道创造新连接；两条候选线完全重合时图上难以区分，需用右侧列表。底图和箭头是几何提示，不代表真实联锁、信号开放、股道编号或现场可通行。
+- 车站始发没有官方正线/侧线、站场、股道或信号数据：线路快照只列车站 1.5 km 内最近 240 条 OSM 区段，最近线路不一定是正线；线路重叠时图上可能难以区分，需要放大或改用最近线路快捷出发。
+- 上行/下行无法从数据判定，界面只显示地理方向（如“向东北”），不声称真实行别；方向只决定初始朝向。
+- 车站线路图依赖 Esri 卫星和 OpenStreetMap 普通瓦片，离线或服务不可用时保留 WGS84 线路并提示；未内置离线瓦片包，也没有股道/站台标注。
 - 20× 倍速下坡度采样、邻省预载和自动保存按真实时间节流，长距离高速行驶时地形坡度滞后；倍速不改变动力学模型和真实铁路纵断面边界。
 - 显式省份邻接表辅助预载，不代表真实跨省铁路路径；省界实际续接仍以原始共享位置为准。
 - 已加载省份会保留在当前会话内；`maxCachedProvinces` 参数尚预留，未实现内存压力下的自动卸载。
@@ -338,7 +360,7 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 3. 修改物理时保持其不依赖 Cesium/Vue，并补 Vitest。
 4. 修改数据结构时更新存档版本及迁移/校验，不让错误导入覆盖有效存档。
 5. 修改部署配置后检查仓库子路径、中文 GeoJSON URL 和 Cesium 静态资源。
-6. 修改 UI 后实际测试：开始新游戏、车站出发、地图选点、牵引/制动/换向、分岔、保存恢复、导入导出；倍速改动需至少检查 1× 与 20× 的模拟时间推进。
+6. 修改 UI 后实际测试：开始新游戏、车站出发（线路图缩放/平移、点线、方向、最近线路快捷出发）、地图选点、牵引/制动/换向、分岔、保存恢复、导入导出；倍速改动需至少检查 1× 与 20× 的模拟时间推进。
 7. 修改拓扑或断点规则后，运行 `npx vite-node scripts/railway-diagnostics.ts <adcode>` 并打开 `/dev/railway-check/` 对照红色/橙色断点和真实数据；修复必须区分“规则误断”和“原始 OSM 缺口”。
 8. 完成后在下方更新日志追加日期、变更和验证结果；发现新限制同步更新第 9 节。
 
@@ -499,3 +521,13 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - 删除 `StationDepartureDialog.vue`、`StationDepartureMap.vue`、`src/data/stationDeparture.ts`、`tests/station-departure.test.ts`，以及对应的 `StationDeparture*` 类型、`APP_CONFIG.stationDeparture` 配置、`GameSession.startOnTrack` 和文档章节。
 - 保留与股道弹窗无关的修复：开始页 HUD 条件链、开始按钮层级、道岔列表滚动定位、共享 `canvasLayer.ts` 与道岔宽屏配线图。
 - 验证：`npm test` 14 个文件、71 项通过；`npm run build` 通过；浏览器选择南京南后直接进入驾驶 HUD，无始发弹窗，开始页/新游戏面板 HUD 数量均为 0，控制台无应用错误。
+
+### 2026-11-03 — 重做车站始发：线路图、方向与最近线路
+
+- 按新需求重做车站始发：选站后打开车站周边线路图，直接点击线路选择始发位置；不再生成站场/股道编号，也不推断上下行。方向以“向东北/向西南”等地理方位显示，选中线路后选择两个方向之一，确认后以驻车状态从该线路距站最近点出发。
+- 提供“直接使用最近线路”快捷出发，按最近线路的两个地理方向各给一个按钮；界面明确说明数据不区分正线/侧线，最近线路不一定是正线。
+- `src/data/stationDeparture.ts` 只读取 1,500 m 内最多 240 条原始区段并截取 ±900 m 显示几何；不调用 `nextBoundary`/`drivableExits`，避免重蹈“弹窗触发全网络 `ensureAttachments`”的卡顿问题。测试中显式 mock 这两个方法并断言未被调用。
+- `StationDepartureMap.vue` 支持卫星与普通底图、滚轮以光标为锚点缩放、＋/－/复位按钮、拖动平移；点击选线按 14 px 命中，拖动超过 3 px 不选线。普通底图改用 OpenStreetMap 标准瓦片（Esri 街道在站区高缩放实测无数据）。
+- `GameSession.startOnTrack` 重新加入，只按所选线路/偏移/方向初始化，不改变存档 V1。`StationDepartureDialog` 放在 `DrivingHud` 之后，保持开始页 `v-if`/`v-else` 链完整。
+- `npm test`：15 个文件、77 项通过；新增车站线路快照、方向换算、指定线路始发 5 项，以及缩放锚点/比例限制/平移 1 项。`npm run build` 通过。
+- 浏览器实测：南京南选站后约 2.4 秒打开线路图；点线后方向按钮启用，确认进入驾驶；拖拽不会误选线；滚轮与＋/－缩放、卫星/普通切换、390×844 布局均正常；开始页/弹窗 HUD 数量为 0，确认后为 1，控制台无应用错误。

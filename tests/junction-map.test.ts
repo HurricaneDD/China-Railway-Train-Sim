@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closestScreenPath, fitLonLatPaths, pointAtPathFraction, screenOf, type ScreenPath } from '../src/map/junctionMap';
+import { closestScreenPath, fitLonLatPaths, panViewBy, pointAtPathFraction, screenOf, zoomViewAt, type ScreenPath } from '../src/map/junctionMap';
 
 describe('道岔二维配线图视图与点击选择', () => {
   it('将完整候选路径等比放入画布，所有点都留在内边距内', () => {
@@ -44,5 +44,20 @@ describe('道岔二维配线图视图与点击选择', () => {
     expect(pointAtPathFraction(path, 0.75).x).toBeCloseTo(100, 5);
     expect(pointAtPathFraction(path, 0.75).y).toBeCloseTo(50, 5);
     expect(pointAtPathFraction(path, 1)).toEqual({ x: 100, y: 100 });
+  });
+
+  it('滚轮缩放锚定光标位置，并受最小/最大比例限制；拖拽平移按像素比例换算', () => {
+    const view = fitLonLatPaths([[{ lon: 118, lat: 32 }, { lon: 118.005, lat: 32.005 }]], 800, 500, 40)!;
+    const anchoredWorld = { x: view.cx + (200 - 400) / view.scale, y: view.cy + (150 - 250) / view.scale };
+    const zoomed = zoomViewAt(view, 800, 500, 200, 150, 2, view.scale * 0.5, view.scale * 8);
+    expect(zoomed.scale).toBeCloseTo(view.scale * 2, 8);
+    expect(zoomed.cx + (200 - 400) / zoomed.scale).toBeCloseTo(anchoredWorld.x, 12);
+    expect(zoomed.cy + (150 - 250) / zoomed.scale).toBeCloseTo(anchoredWorld.y, 12);
+    expect(zoomViewAt(view, 800, 500, 400, 250, 99, view.scale * 0.5, view.scale * 8).scale).toBeCloseTo(view.scale * 8, 8);
+    expect(zoomViewAt(view, 800, 500, 400, 250, 0.001, view.scale * 0.5, view.scale * 8).scale).toBeCloseTo(view.scale * 0.5, 8);
+    const panned = panViewBy(view, 80, -50);
+    expect(panned.cx).toBeCloseTo(view.cx - 80 / view.scale, 12);
+    expect(panned.cy).toBeCloseTo(view.cy + 50 / view.scale, 12);
+    expect(panned.scale).toBe(view.scale);
   });
 });

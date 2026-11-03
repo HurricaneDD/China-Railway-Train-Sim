@@ -1,4 +1,4 @@
-export type BasemapId = 'street' | 'satellite' | 'none';
+export type BasemapId = 'street' | 'satellite' | 'plain' | 'none';
 
 export interface BasemapProvider {
   id: Exclude<BasemapId, 'none'>;
@@ -32,7 +32,19 @@ export const BASEMAPS: Record<Exclude<BasemapId, 'none'>, BasemapProvider> = {
       return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/${z}/${y}/${x}`;
     },
   },
+  plain: {
+    id: 'plain',
+    name: '普通',
+    attribution: '© OpenStreetMap contributors',
+    minZoom: 2,
+    maxZoom: 19,
+    tileSize: 256,
+    tileUrl(z, x, y) {
+      return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+    },
+  },
   satellite: {
+
     id: 'satellite',
     name: '卫星影像',
     attribution: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics',

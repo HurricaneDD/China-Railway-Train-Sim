@@ -75,6 +75,32 @@ export interface SnapResult {
   distance: number;
 }
 
+/** A nearby original rail segment offered as a starting line. */
+export interface StationDepartureLine {
+  segmentId: string;
+  name: string;
+  /** Metres from the station coordinate to the nearest point on this line. */
+  distance: number;
+  /** Nearest offset along the original segment (the departure point). */
+  offset: number;
+  segmentLength: number;
+  /** Coordinate-ascending tangent at the departure point. */
+  heading: number;
+  bridge: boolean;
+  tunnel: boolean;
+  /** Local display polyline around the departure point. */
+  points: LonLat[];
+}
+
+/** Local, display-only snapshot around a station. No yard or track numbering. */
+export interface StationDeparture {
+  station: Station;
+  center: LonLat;
+  radius: number;
+  lines: StationDepartureLine[];
+  truncated: boolean;
+}
+
 export interface RoutePoint extends LonLat {
   height: number;
   heading: number;

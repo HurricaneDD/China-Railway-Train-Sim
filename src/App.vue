@@ -7,13 +7,15 @@ import NewGamePanel from './components/NewGamePanel.vue';
 import SavePanel from './components/SavePanel.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
 import StartMenu from './components/StartMenu.vue';
+import StationDepartureDialog from './components/StationDepartureDialog.vue';
 import { APP_CONFIG, type GameSettings } from './config';
 import { HornAudio } from './core/audio';
 import { GameSession } from './core/session';
 import { loadSettings, saveSettings, saveStore, validateGameSave } from './core/storage';
+import { buildStationDeparture, lineBearing } from './data/stationDeparture';
 import type { CesiumMap } from './map/CesiumMap';
-import type { GameSave, LonLat, Reverser, Station } from './types';
-import { distance } from './utils/geo';
+import type { GameSave, LonLat, Reverser, Station, StationDeparture, StationDepartureLine } from './types';
+import { compassDirection, distance } from './utils/geo';
 
 const session = new GameSession();
 const horn = new HornAudio();
@@ -30,6 +32,7 @@ const saves = ref<GameSave[]>([]);
 const settings = ref<GameSettings>(loadSettings());
 const selectedProvince = ref('');
 const selectingMap = ref(false);
+const departure = ref<StationDeparture | null>(null);
 const userPaused = ref(false);
 const showHelp = ref(false);
 const dataError = ref('');
@@ -125,6 +128,7 @@ async function loadSave(save: GameSave): Promise<void> {
 
 async function newGame(): Promise<void> {
   // Clear any leftover modal state from a previous attempt before leaving the menu.
+  departure.value = null;
   overlay.value = null;
   selectingMap.value = false;
   showHelp.value = false;
@@ -180,11 +184,35 @@ async function startStation(station: Station): Promise<void> {
   busy.value = true;
   selectedProvince.value = station.province;
   try {
-    const snapped = await session.startAt(station.province, { lon: station.longitude, lat: station.latitude }, APP_CONFIG.data.stationSnapDistance);
-    await beginDriving(snapped.position);
-    notify(`已从${station.full_name}出发 · 吸附偏差 ${snapped.distance.toFixed(0)} m`);
+    // Only local geometry: never trigger a whole-network topology build here.
+    await session.railway.load(station.province);
+    const snapshot = buildStationDeparture(session.railway.network, station);
+    if (!snapshot.lines.length) {
+      notify(`${station.name}站周边没有可识别的国铁线路，请改用地图选点`, true);
+      return;
+    }
+    selectingMap.value = false;
+    map.value?.setPicking();
+    departure.value = snapshot;
   } catch (error) {
-    notify(error instanceof Error ? error.message : '车站关联铁路失败', true);
+    notify(error instanceof Error ? error.message : '车站线路图读取失败', true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function departFromStation(payload: { line: StationDepartureLine; direction: 1 | -1 }): Promise<void> {
+  if (busy.value) return;
+  const station = departure.value?.station;
+  busy.value = true;
+  try {
+    const bearing = lineBearing(payload.line, payload.direction);
+    const point = session.startOnTrack(payload.line.segmentId, payload.line.offset, payload.direction);
+    departure.value = null;
+    if (station) notify(`已从${station.full_name}出发 · 向${compassDirection(bearing)}`);
+    await beginDriving(point);
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '无法从所选线路出发', true);
   } finally {
     busy.value = false;
   }
@@ -394,6 +422,7 @@ async function retryData(): Promise<void> {
       <div v-if="selectingMap" class="map-select-banner"><span class="pulse" />地图选点已启用 · 点击铁路附近位置<button @click="selectingMap = false; map?.setPicking()">返回选站</button></div>
     </div>
     <DrivingHud v-else :session="session" :update-key="updateKey" :camera-range="settings.cameraRange" :camera-mode="cameraMode" @view="toggleCamera" @pause="userPaused = !userPaused" @help="showHelp = true" @parking="session.toggleParkingBrake()" @retry="session.retryBorder()" @menu="returnMenu" @save="quickSave" @settings="openOverlay('settings')" @reverser="changeReverser" @horn="(held) => held ? horn.start() : horn.stop()" @sand="triggerSand" @camera="(range) => { map?.setCameraRange(range); settings.cameraRange = Math.max(35, Math.min(900, range)); }" @speed="session.setSimulationSpeed($event)" />
+    <StationDepartureDialog v-if="departure" :departure="departure" :busy="busy" @close="departure = null" @depart="departFromStation" />
     <JunctionDialog v-if="session.junction && !showHelp && !userPaused && !overlay" :junction="session.junction" @choose="(id) => session.chooseJunction(id)" />
     <div v-if="screen === 'driving' && showHelp" class="modal-backdrop">
       <section class="panel help-panel" role="dialog" aria-modal="true" aria-labelledby="help-title">

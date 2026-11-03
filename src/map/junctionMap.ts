@@ -103,3 +103,21 @@ function squaredDistanceToSegment(point: ScreenPoint, a: ScreenPoint, b: ScreenP
   const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared));
   return (point.x - (a.x + dx * t)) ** 2 + (point.y - (a.y + dy * t)) ** 2;
 }
+
+
+/** Zoom around a screen anchor while keeping that map point under the cursor. */
+export function zoomViewAt(view: MapView, width: number, height: number, x: number, y: number, factor: number, minScale: number, maxScale: number): MapView {
+  const scale = Math.max(minScale, Math.min(maxScale, view.scale * factor));
+  const worldX = view.cx + (x - width / 2) / view.scale;
+  const worldY = view.cy + (y - height / 2) / view.scale;
+  return {
+    cx: worldX - (x - width / 2) / scale,
+    cy: worldY - (y - height / 2) / scale,
+    scale,
+  };
+}
+
+/** Pan by a screen-pixel delta (positive moves the map content right/down). */
+export function panViewBy(view: MapView, dx: number, dy: number): MapView {
+  return { cx: view.cx - dx / view.scale, cy: view.cy - dy / view.scale, scale: view.scale };
+}

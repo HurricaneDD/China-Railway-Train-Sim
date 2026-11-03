@@ -9,6 +9,13 @@ export const APP_CONFIG = {
     renderRadius: 6500,
     maxRenderSegments: 900,
   },
+  stationDeparture: {
+    /** Nearby original segments offered as selectable starting lines. */
+    radius: 1500,
+    /** Displayed length of each line around the station, in both directions. */
+    windowMeters: 900,
+    maxLines: 240,
+  },
   track: {
     gauge: 1.435,
     sleeperSpacing: 12,
