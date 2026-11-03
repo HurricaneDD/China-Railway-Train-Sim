@@ -60,6 +60,12 @@ select { width: 100%; padding: 10px 11px; border: 1px solid #394237; border-radi
 .search-line input { min-width: 0; flex: 1; padding: 9px 10px; border: 1px solid #394237; color: #e7eee2; background: #101610; font-size: 11px; }
 .search-line input::placeholder { color: #697466; }
 .search-line button { width: 37px; border: 1px solid var(--line); color: var(--accent); background: #1b231b; }
+.basemap-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; margin-top: 9px; padding-top: 9px; border-top: 1px solid rgba(255,255,255,.07); }
+.basemap-caption span { display: block; color: #c4cfbe; font-size: 9px; }
+.basemap-caption small { display: block; margin-top: 3px; color: #798675; font-size: 8px; }
+.basemap-tabs { display: flex; flex-shrink: 0; gap: 3px; }
+.basemap-tabs button { min-width: 38px; padding: 5px 7px; border: 1px solid rgba(255,255,255,.12); color: #aeb8a9; background: #182018; font-size: 9px; }
+.basemap-tabs button.active { border-color: var(--accent); color: var(--ink); background: var(--accent); }
 .category-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 9px; }
 .category-tabs button { flex: 1 0 auto; padding: 6px 7px; border: 1px solid rgba(255,255,255,.1); color: #aeb8a9; background: #182018; font-size: 9px; white-space: nowrap; }
 .category-tabs button.active { border-color: var(--accent); color: var(--ink); background: var(--accent); }

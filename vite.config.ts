@@ -13,9 +13,17 @@ function railwayData(): Plugin {
       // fallback and open the main simulator instead of the inspector.
       server.middlewares.use((req, res, next) => {
         const url = new URL(req.url ?? '/', 'http://localhost');
-        if (url.pathname === '/dev/raliway-check') {
+        // Compatibility redirect for the misspelled path used in earlier builds.
+        if (url.pathname === '/dev/raliway-check' || url.pathname.startsWith('/dev/raliway-check/')) {
+          const suffix = url.pathname.slice('/dev/raliway-check'.length) || '/';
           res.statusCode = 302;
-          res.setHeader('Location', `/dev/raliway-check/${url.search}`);
+          res.setHeader('Location', `/dev/railway-check${suffix}${url.search}`);
+          res.end();
+          return;
+        }
+        if (url.pathname === '/dev/railway-check') {
+          res.statusCode = 302;
+          res.setHeader('Location', `/dev/railway-check/${url.search}`);
           res.end();
           return;
         }
@@ -59,7 +67,7 @@ function railwayCheckHtml(): Plugin {
       order: 'post',
       handler(html, context) {
         const path = (context.filename || context.path || '').replace(/\\/g, '/');
-        if (!path.endsWith('dev/raliway-check/index.html')) return html;
+        if (!path.endsWith('dev/railway-check/index.html')) return html;
         return html
           .replace(/\s*<link[^>]+cesium[^>]*>/gi, '')
           .replace(/\s*<script[^>]+cesium[^>]*>\s*<\/script>/gi, '');
@@ -87,7 +95,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
-        railwayCheck: resolve(__dirname, 'dev/raliway-check/index.html'),
+        railwayCheck: resolve(__dirname, 'dev/railway-check/index.html'),
       },
     },
   },

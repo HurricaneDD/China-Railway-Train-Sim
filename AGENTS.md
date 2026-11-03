@@ -54,12 +54,14 @@ China-Railway-Train-Sim-Kimi/
 ├─ vite.config.ts                Vue/Cesium、相对 base、多页面入口、开发数据中间件、构建复制
 ├─ AGENTS.md                     本说明，后续开发必读
 ├─ dev/
-│  └─ raliway-check/             线路人工检查页（目录名沿用用户指定拼写）
+│  └─ railway-check/             线路人工检查页
 │     ├─ index.html              嵌套页面入口
 │     ├─ main.ts                 Vue 启动
 │     ├─ Inspector.vue           分省加载、断点列表、详情与导出
 │     ├─ RailwayMap.vue          2D Canvas 线路与断点绘制
 │     ├─ analysis.ts             断点、被过滤连接、最近线路与弱分量分析
+│     ├─ basemap.ts              Esri 街道/卫星 WGS84 Web Mercator 瓦片源
+│     ├─ mercator.ts             EPSG:3857 投影、瓦片级别与米制比例
 │     ├─ style.css               检查页独立样式
 │     └─ README.md               使用方式、规则与限制
 ├─ .github/workflows/deploy.yml  GitHub Pages 自动构建部署
@@ -105,6 +107,7 @@ China-Railway-Train-Sim-Kimi/
    ├─ dynamics.test.ts           制动、惯性、坡度、黏着与撒砂
    ├─ storage.test.ts            错误存档拒绝
    ├─ railway-check.test.ts      检查页断点分类、间隙与桥隧过渡
+   ├─ mercator.test.ts           WGS84/Web Mercator 投影与底图 URL
    └─ ...                        拓扑、会话、渲染、全国回归
 ```
 
@@ -193,12 +196,13 @@ China-Railway-Train-Sim-Kimi/
 
 ### 4.9 线路人工检查
 
-- 页面位于 `dev/raliway-check/`，开发地址 `http://<host>:8062/dev/raliway-check/`（末尾 `/` 不可省略），构建输出 `dist/dev/raliway-check/index.html`。开发服务器对无尾斜杠的 `/dev/raliway-check` 返回 302；否则 Vite SPA 回退会返回主应用首页。主应用“设置 → 数据来源与许可”也提供入口。该页是只读工具，不修改正式数据、不写存档、不参与驾驶。
+- 页面位于 `dev/railway-check/`，开发地址 `http://<host>:8062/dev/railway-check/`（末尾 `/` 不可省略），构建输出 `dist/dev/railway-check/index.html`。开发服务器对无尾斜杠的 `/dev/railway-check` 返回 302；否则 Vite SPA 回退会返回主应用首页。主应用“设置 → 数据来源与许可”也提供入口。该页是只读工具，不修改正式数据、不写存档、不参与驾驶。
 - `analysis.ts` 复用 `RailNetwork.boundariesOf/connectionsAt/segmentsNear`，按省统计：无可行驶出边的断点组、被过滤的非掉头候选、100 m 内最近线路、桥/隧区段、弱连通分量。
 - 断点分类：红色 `filtered`（有被拒候选）、橙色 `nearby`（100 m 内有其它线路）、灰色 `isolated`（100 m 内没有其它线路）。接近掉头的候选不列为断点，因为应由换向处理。
-- `RailwayMap.vue` 使用 2D Canvas 绘制原始区段（普通/桥/隧分色）和断点；`Inspector.vue` 负责分省加载、筛选、详情、复制坐标/JSON 和导出。`加载邻省` 会把相邻省份加入同一 `RailNetwork`，本次会话内不卸载。
-- 数据读取通过 `RailwayRepository`/`RailNetwork` 构造器注入的 `JsonFetcher`，页面用 `../../data/` 解析嵌套路径。Vite 多页面入口使用 `dev/raliway-check/index.html`；`railway-check-html` 插件只在该页面移除 `vite-plugin-cesium` 注入的 Cesium CSS/JS 标签。
-- 检查页不是 Cesium 地形图，不显示真实卫星底图、隧道洞口或桥梁结构；断点是派生拓扑输出，不能直接当作原始数据错误。
+- `RailwayMap.vue` 使用 2D Canvas + 标准 Web Mercator 绘制原始区段（普通/桥/隧分色）和断点；`Inspector.vue` 负责分省加载、筛选、详情、复制坐标/JSON 和导出。`加载邻省` 会把相邻省份加入同一 `RailNetwork`，本次会话内不卸载。
+- 底图提供街道（Esri World Street Map）、卫星（Esri World Imagery）和无底图。两种在线底图均为 WGS84 基准的 EPSG:3857 瓦片；线路/断点是 WGS84 EPSG:4326，直接用 Web Mercator 公式投影，不做 GCJ-02/BD-09 纠偏。`basemap.ts` 定义瓦片 URL，`mercator.ts` 负责投影、米制比例和瓦片级别。底图失败时提示并回退深色网格。
+- 数据读取通过 `RailwayRepository`/`RailNetwork` 构造器注入的 `JsonFetcher`，页面用 `../../data/` 解析嵌套路径。Vite 多页面入口使用 `dev/railway-check/index.html`；`railway-check-html` 插件只在该页面移除 `vite-plugin-cesium` 注入的 Cesium CSS/JS 标签。
+- 检查页不是 Cesium 立体地形图：底图只是 2D 栅格参考，不显示立体桥梁、隧道洞口或真实纵断面；断点是派生拓扑输出，不能直接当作原始数据错误。
 
 ## 5. GitHub Pages 构建与部署
 
@@ -208,9 +212,9 @@ China-Railway-Train-Sim-Kimi/
 4. `base: './'` 让应用可部署在 `/<仓库名>/`，`assets.ts` 通过 `document.baseURI + import.meta.env.BASE_URL` 解析数据地址。检查页位于嵌套路径，使用注入的 `JsonFetcher` 以 `../../data/` 读取，不沿用主应用 BASE_URL。
 5. `vite-plugin-cesium` 负责 Cesium Workers/Assets/Widgets 等静态资源；不得只复制 JS 而漏掉这些文件。
 6. 自定义 Vite 插件仅复制 `stations.json`、`provinces_index.json`、`geojson/` 和数据说明，并生成 `.nojekyll`。
-7. 不启用历史路由，刷新不存在服务端路由回退问题。`vite.config.ts` 使用多页面输入：主应用 `index.html` 和检查页 `dev/raliway-check/index.html`；`railway-check-html` 在 `order: post` 阶段移除注入检查页的 Cesium CSS/JS，检查页自身不依赖 Cesium。
+7. 不启用历史路由，刷新不存在服务端路由回退问题。`vite.config.ts` 使用多页面输入：主应用 `index.html` 和检查页 `dev/railway-check/index.html`；`railway-check-html` 在 `order: post` 阶段移除注入检查页的 Cesium CSS/JS，检查页自身不依赖 Cesium。
 8. 已生成并保留 `package-lock.json`；Actions 使用 `npm ci` 和 setup-node 的 npm 缓存，依赖变化时须同步更新锁文件。
-9. 构建后必须直接检查 `dist/index.html` 仍包含 `cesium/Cesium.js`，`dist/dev/raliway-check/index.html` 不含 Cesium 标签且资源路径为 `../../assets/...`；再用静态服务器实际打开检查页。
+9. 构建后必须直接检查 `dist/index.html` 仍包含 `cesium/Cesium.js`，`dist/dev/railway-check/index.html` 不含 Cesium 标签且资源路径为 `../../assets/...`；再用静态服务器实际打开检查页。
 
 ## 6. Cesium ion Token
 
@@ -228,7 +232,8 @@ Token 集中在 `src/config.ts` 的 `APP_CONFIG.cesiumIonToken`，初始化时�
 | 二维相交不一定连通 | 只按端点位置连接，不把折线中间的几何交叉自动建为节点；仅几何交叉、没有共享端点的线不连接。 |
 | 共享端点上的桥隧/`layer` 标签不同 | 不能因此切断正线。原始坐标重合（<0.01 m）且转角≤35°时保留为 `uncertain`；桥隧直连、桥与桥不同层、层差 2–3 也按几何连续性推定。非共享端点继续保守筛选。 |
 | 检查页嵌套路径 | 不能用主应用 `dataUrl`（BASE_URL 相对检查页会解析错）；通过 `JsonFetcher` 用 `../../data/`。Cesium 插件会向所有 HTML 注入标签，检查页需在 post 阶段剔除。 |
-| 多页面构建 | `vite.config.ts` 必须同时列出主应用和 `dev/raliway-check/index.html`；只加 HTML 不加 rollup 输入不会产出检查页。 |
+| WGS84 线路叠加底图 | 只能用 WGS84 基准的 Web Mercator（EPSG:3857）瓦片，例如 Esri World Street Map / World Imagery。禁止使用 AMap、腾讯、Google 中国等 GCJ-02 底图；线路坐标不需要也不允许再做 GCJ-02 转换。 |
+| 多页面构建 | `vite.config.ts` 必须同时列出主应用和 `dev/railway-check/index.html`；只加 HTML 不加 rollup 输入不会产出检查页。 |
 | 倍速直接乘物理 `dt` | 会改变动力学积分和事件判定；应放大累加器并继续按 1/60 s 固定步长 tick，限制每帧最大步数，切速清空积压。 |
 | 同名线路不代表同一要素 | 去重使用 osm_id + layer，不按名称删除。 |
 | 车站和 OSM 线路无外键 | 每次选站动态求最近线段，失败要明示；不得虚构关联字段。 |
@@ -273,17 +278,26 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 ### 2026-11-02 桥隧拓扑修正、倍速与检查页验证
 
 - `npm test`：12 个测试文件、63 项全部通过；新增 `railway-check.test.ts` 3 项、20× 时间推进 1 项、桥隧/层级共享端点 1 项及既有拓扑回归。
-- `npm run build`：`vue-tsc` 与 Vite 多页面构建通过；主页面仍注入 Cesium，检查页产物 `dist/dev/raliway-check/index.html` 不含 Cesium 标签，资源为 `../../assets/...`。
+- `npm run build`：`vue-tsc` 与 Vite 多页面构建通过；主页面仍注入 Cesium，检查页产物 `dist/dev/railway-check/index.html` 不含 Cesium 标签，资源为 `../../assets/...`。
 - 开发服务器 + headless Chromium：检查页自动加载江苏，显示 9,839 区段、1,728 个断点组、280 条被过滤连接、桥 2,930 / 隧 76、弱分量 100、最大分量 9,470；打开红色断点详情、切换被过滤连接、加载 5 个省级数据集后断点 1,728 → 1,660、弱分量 100 → 91；控制台无应用错误。
 - 同一生产构建通过 Python 静态服务器实际打开检查页并加载成功；`dist/index.html` 仍包含 `cesium/Cesium.js`。
 - 主应用 + headless Chromium：南京南进入驾驶，HUD 显示 1×/5×/10×/20×，选择 20× 后运行时间按倍速推进；headless SwiftShader 有 WebGL 警告和黑屏，未作为视觉验收。
 - 江苏正式数据未修改；本轮只改派生拓扑、会话倍速、检查页和文档。
 
+### 2026-11-03 目录更正与 WGS84 底图
+
+- 用户确认目录应为 `dev/railway-check`，已用 `git mv` 从 `dev/raliway-check` 重命名，并更新 Vite 入口、302 跳转、设置链接、测试导入和全部文档；旧路径不再存在。
+- 检查页从自制的等距经纬度画布改为标准 Web Mercator（EPSG:3857）。新增 `basemap.ts` 和 `mercator.ts`；街道使用 Esri World Street Map，卫星使用 Esri World Imagery，均为无密钥的 WGS84 Web Mercator 瓦片，直线叠加 WGS84 线路/断点，不做 GCJ-02/BD-09 纠偏。CARTO 公共瓦片实测出现 “API KEY REQUIRED” 水印，已放弃。
+- 新增底图切换（街道/卫星/无）、暗色遮罩、瓦片归属、加载失败提示和深色网格回退；瓦片缓存上限 480，离开页面后停止重绘。
+- `npm test`：13 个文件、67 项通过；新增 `mercator.test.ts` 覆盖经纬度往返、极区截断、米制比例、瓦片级别和 Esri URL。
+- `npm run build` 通过；`dist/dev/railway-check/index.html` 仍无 Cesium 标签。headless Chromium 实测街道、卫星和无底图三种模式，江苏线路、断点与底图空间对齐，控制台无应用错误。
+
 ## 9. 当前已知边界（不是已完成能力）
 
 - 派生拓扑基于几何端点近似，不包含真实道岔联锁、信号、站场股道或调度。2026-11-02 已修正“共享端点仅因桥隧/层级标签不同而切断”的误断，但标签相同或坐标重合仍不证明物理连通；原始缺口或没有共享顶点的几何交叉不会自动补连，不能据此保证全国任意路线连续可达。
-- 检查页是只读 2D Canvas 诊断，不是 Cesium 地形图：不显示卫星底图、桥梁结构或隧道洞口；断点分组、100 m 邻近线路和弱分量均为几何启发式。江苏加载后仍有 1,722 个几何孤立端点，未逐个核验；其中可能包含真实站场尽端、支线终点、>2 m 原始缺口或省界断点。
+- 检查页是只读 2D Canvas + 栅格底图诊断：街道/卫星底图只是空间参考，不显示立体桥梁、隧道洞口或真实纵断面；断点分组、100 m 邻近线路和弱分量均为几何启发式。江苏加载后仍有 1,722 个几何孤立端点，未逐个核验；其中可能包含真实站场尽端、支线终点、>2 m 原始缺口或省界断点。
 - 检查页加载邻省后本次会话不卸载，后续分析会继续使用已加载数据；不加载邻省时省界断点可能误报。检查页未实现断点聚合/聚合展开，省域缩放下标记可能重叠；触摸缩放和超长省份性能未验收。
+- 检查页底图依赖 Esri 在线瓦片，离线或服务不可用时显示提示并回退到深色网格；未内置离线瓦片缓存。底图只做显示，不参与距离和拓扑计算。
 - 20× 倍速下坡度采样、邻省预载和自动保存按真实时间节流，长距离高速行驶时地形坡度滞后；倍速不改变动力学模型和真实铁路纵断面边界。
 - 显式省份邻接表辅助预载，不代表真实跨省铁路路径；省界实际续接仍以原始共享位置为准。
 - 已加载省份会保留在当前会话内；`maxCachedProvinces` 参数尚预留，未实现内存压力下的自动卸载。
@@ -305,7 +319,7 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 4. 修改数据结构时更新存档版本及迁移/校验，不让错误导入覆盖有效存档。
 5. 修改部署配置后检查仓库子路径、中文 GeoJSON URL 和 Cesium 静态资源。
 6. 修改 UI 后实际测试：开始新游戏、车站出发、地图选点、牵引/制动/换向、分岔、保存恢复、导入导出；倍速改动需至少检查 1× 与 20× 的模拟时间推进。
-7. 修改拓扑或断点规则后，运行 `npx vite-node scripts/railway-diagnostics.ts <adcode>` 并打开 `/dev/raliway-check/` 对照红色/橙色断点和真实数据；修复必须区分“规则误断”和“原始 OSM 缺口”。
+7. 修改拓扑或断点规则后，运行 `npx vite-node scripts/railway-diagnostics.ts <adcode>` 并打开 `/dev/railway-check/` 对照红色/橙色断点和真实数据；修复必须区分“规则误断”和“原始 OSM 缺口”。
 8. 完成后在下方更新日志追加日期、变更和验证结果；发现新限制同步更新第 9 节。
 
 ## 11. 更新日志
@@ -416,9 +430,9 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - 查明“桥隧处理”实际只是 OSM 标签：`bridge === 'T'` / `tunnel === 'T'`，不做结构、地形或几何分类；旧连接规则把 `layer` 差异也当作断线条件，共享端点仅因桥隧/层级标签不同即被隔离。江苏实测 1,108 个被拒属性候选全部位于完全重合端点，其中 812 个仅层差。
 - 修正 `connectionsAt`：共享端点（<0.01 m）且属性冲突转角≤35°时保留为 `uncertain` 可行驶候选；桥隧直连、桥与桥不同层、层差 2–3 均可连续；非共享端点仍保守。江苏有向无出边边界 2,616→1,735、带候选断点 894→13、属性冲突 1,108→0、弱分量 469→100、最大分量 3,535→9,470；南京周边多条正线恢复连续。剩余 1,722 个几何端点仍需人工核查。
 - 增加 1×/5×/10×/20× 模拟倍速：固定 1/60 s 物理步长不变，按真实帧放大累加器并限制每帧 300 步；切速清空积压。按键重复、坡度采样、邻省预载、自动保存按真实时间节流，新行程/恢复回到 1×。
-- 新增 `dev/raliway-check/` 分省只读检查页：普通/桥/隧分色，红色标出被过滤断点、橙色标近邻未接入、灰色标孤立端点；可加载邻省、查看来路/候选角度/间隙/OSM ID、复制坐标/JSON、导出本省报告。Vite 多页面构建，检查页不加载 Cesium；数据路径通过注入 `JsonFetcher` 解析，避免嵌套页面 BASE_URL 错误。
+- 新增 `dev/railway-check/` 分省只读检查页：普通/桥/隧分色，红色标出被过滤断点、橙色标近邻未接入、灰色标孤立端点；可加载邻省、查看来路/候选角度/间隙/OSM ID、复制坐标/JSON、导出本省报告。Vite 多页面构建，检查页不加载 Cesium；数据路径通过注入 `JsonFetcher` 解析，避免嵌套页面 BASE_URL 错误。
 - `npm test` 12 文件 63 项通过；`npm run build` 通过。开发服务器和静态 `dist` 均实际打开检查页；江苏加载 9,839 区段、1,728 个断点组、280 条被过滤连接；加载 5 省后断点 1,660、弱分量 91。主应用南京南进入驾驶并选中 20×，模拟时间按倍速推进；headless SwiftShader 的 WebGL 警告未作为视觉验收。
-- 正式 `data/` 未修改；未完成逐省人工核对、真实长途 20× 驾驶、真实触屏和 GitHub Pages 线上验收。详见 `docs/RAILWAY-TOPOLOGY.md`、`docs/DEVELOPMENT-STATE.md` 和 `dev/raliway-check/README.md`。
+- 正式 `data/` 未修改；未完成逐省人工核对、真实长途 20× 驾驶、真实触屏和 GitHub Pages 线上验收。详见 `docs/RAILWAY-TOPOLOGY.md`、`docs/DEVELOPMENT-STATE.md` 和 `dev/railway-check/README.md`。
 
 ### 2026-11-03 — 开发服务器外部 Host 放行
 
@@ -428,7 +442,7 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 
 ### 2026-11-03 — 检查页入口修正
 
-- 修正用户反馈“访问检查页却像主应用首页”：无尾斜杠的 `/dev/raliway-check` 会落入 Vite SPA 回退，返回主应用 `index.html`。`vite.config.ts` 的开发中间件现在对该路径返回 302 到 `/dev/raliway-check/`，查询参数保留；本机和 `http://fangxx.fun:8062/dev/raliway-check` 实测均跳转成功。
-- `SettingsPanel.vue` 的“数据来源与许可”增加“打开检查页 ↗”链接，直接指向 `./dev/raliway-check/`，生产子路径下同样可用。
-- `dev/raliway-check/README.md` 更新为 8062 端口并强调末尾斜杠。
+- 修正用户反馈“访问检查页却像主应用首页”：无尾斜杠的 `/dev/railway-check` 会落入 Vite SPA 回退，返回主应用 `index.html`。`vite.config.ts` 的开发中间件现在对该路径返回 302 到 `/dev/railway-check/`，查询参数保留；本机和 `http://fangxx.fun:8062/dev/railway-check` 实测均跳转成功。
+- `SettingsPanel.vue` 的“数据来源与许可”增加“打开检查页 ↗”链接，直接指向 `./dev/railway-check/`，生产子路径下同样可用。
+- `dev/railway-check/README.md` 更新为 8062 端口并强调末尾斜杠。
 - 验证：`curl` 确认 302 和跳转后的标题为“线路人工检查”；`npm run build` 通过（检查页仍不含 Cesium 标签）。

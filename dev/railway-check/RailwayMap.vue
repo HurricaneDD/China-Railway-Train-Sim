@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { RailSegment } from '../../src/types';
+import { BASEMAPS, type BasemapId } from './basemap';
 import type { BreakGroup, FilteredLink } from './analysis';
+import { metresPerWorldUnit, projectMercator, tileZoomForScale, unprojectMercator } from './mercator';
 
 const props = defineProps<{
   segments: RailSegment[];
@@ -12,6 +14,7 @@ const props = defineProps<{
   showFiltered: boolean;
   showBridgeTunnel: boolean;
   showIsolated: boolean;
+  basemap: BasemapId;
 }>();
 const emit = defineEmits<{ select: [id: string | null]; cursor: [lon: number | null, lat: number | null] }>();
 
@@ -22,11 +25,11 @@ const size = ref({ width: 0, height: 0 });
 const hoverId = ref<string | null>(null);
 const tooltip = ref({ x: 0, y: 0 });
 const cursor = ref<{ lon: number; lat: number } | null>(null);
+const basemapNotice = ref('');
 
 let ctx: CanvasRenderingContext2D | null = null;
 let resizeObserver: ResizeObserver | undefined;
 let renderFrame = 0;
-let cosLat = 1;
 let fitScale = 1;
 let bounds = { west: 0, south: 0, east: 1, north: 1 };
 let allPath = new Path2D();
@@ -39,12 +42,20 @@ let dragStart = { x: 0, y: 0 };
 let dragCentre = { x: 0, y: 0 };
 let dragDistance = 0;
 let pointerDownId: number | null = null;
+let disposed = false;
+
+interface TileEntry {
+  image: HTMLImageElement;
+  state: 'loading' | 'ready' | 'error';
+}
+const tileCache = new Map<string, TileEntry>();
+let tileFailureCount = 0;
 
 const visibleBreaks = computed(() => props.breaks.filter(group => props.showIsolated || group.kind !== 'isolated' || group.id === props.selectedId));
 const hovered = computed(() => visibleBreaks.value.find(group => group.id === hoverId.value));
 
 function project(lon: number, lat: number): { x: number; y: number } {
-  return { x: lon * cosLat, y: -lat };
+  return projectMercator(lon, lat);
 }
 
 function screenOf(lon: number, lat: number): { x: number; y: number } {
@@ -64,7 +75,7 @@ function worldAt(x: number, y: number): { x: number; y: number } {
 
 function lonLatAt(x: number, y: number): { lon: number; lat: number } {
   const point = worldAt(x, y);
-  return { lon: point.x / cosLat, lat: -point.y };
+  return unprojectMercator(point.x, point.y);
 }
 
 function addSegment(path: Path2D, segment: RailSegment): void {
@@ -88,18 +99,19 @@ function rebuildPaths(): void {
   let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity;
   for (const segment of props.segments) {
     for (const point of segment.points) {
-      west = Math.min(west, point.lon);
-      east = Math.max(east, point.lon);
-      south = Math.min(south, point.lat);
-      north = Math.max(north, point.lat);
+      const projected = project(point.lon, point.lat);
+      west = Math.min(west, projected.x);
+      east = Math.max(east, projected.x);
+      south = Math.min(south, projected.y);
+      north = Math.max(north, projected.y);
     }
   }
   if (!Number.isFinite(west)) {
     bounds = { west: 0, south: 0, east: 1, north: 1 };
     return;
   }
+  // Web Mercator world coordinates: x grows east, y grows south.
   bounds = { west, south, east, north };
-  cosLat = Math.max(0.01, Math.cos(((south + north) / 2) * Math.PI / 180));
   for (const segment of props.segments) {
     addSegment(allPath, segment);
     if (segment.properties.tunnel) addSegment(tunnelPath, segment);
@@ -111,15 +123,13 @@ function rebuildPaths(): void {
 
 function fit(): void {
   if (!props.segments.length || !size.value.width || !size.value.height) return;
-  const projectedWest = bounds.west * cosLat;
-  const projectedEast = bounds.east * cosLat;
-  const spanX = Math.max(0.000001, projectedEast - projectedWest);
+  const spanX = Math.max(0.000001, bounds.east - bounds.west);
   const spanY = Math.max(0.000001, bounds.north - bounds.south);
   const scale = Math.min((size.value.width - 72) / spanX, (size.value.height - 72) / spanY);
   fitScale = Math.max(0.01, scale);
   view.value = {
-    cx: ((projectedWest + projectedEast) / 2),
-    cy: (-(bounds.south + bounds.north) / 2),
+    cx: (bounds.west + bounds.east) / 2,
+    cy: (bounds.south + bounds.north) / 2,
     scale: fitScale,
   };
   requestRender();
@@ -166,11 +176,90 @@ function resize(): void {
 }
 
 function requestRender(): void {
-  if (renderFrame) return;
+  if (disposed || renderFrame) return;
   renderFrame = requestAnimationFrame(() => {
     renderFrame = 0;
     draw();
   });
+}
+
+function drawBasemap(): void {
+  if (!ctx || props.basemap === 'none') return;
+  const provider = BASEMAPS[props.basemap];
+  const { width, height } = size.value;
+  const zoom = tileZoomForScale(view.value.scale, provider.minZoom, provider.maxZoom);
+  const tilesPerSide = 2 ** zoom;
+  const tileWorld = 1 / tilesPerSide;
+  const tileScreen = tileWorld * view.value.scale;
+  const left = view.value.cx - (width / 2) / view.value.scale;
+  const right = view.value.cx + (width / 2) / view.value.scale;
+  const top = view.value.cy - (height / 2) / view.value.scale;
+  const bottom = view.value.cy + (height / 2) / view.value.scale;
+  const firstX = Math.max(0, Math.floor(left / tileWorld));
+  const lastX = Math.min(tilesPerSide - 1, Math.ceil(right / tileWorld) - 1);
+  const firstY = Math.max(0, Math.floor(top / tileWorld));
+  const lastY = Math.min(tilesPerSide - 1, Math.ceil(bottom / tileWorld) - 1);
+  let ready = 0;
+  let failed = 0;
+
+  for (let y = firstY; y <= lastY; y++) {
+    for (let x = firstX; x <= lastX; x++) {
+      const key = `${provider.id}/${zoom}/${x}/${y}`;
+      let entry = tileCache.get(key);
+      if (!entry) {
+        const image = new Image();
+        const created: TileEntry = { image, state: 'loading' };
+        const providerId = provider.id;
+        entry = created;
+        tileCache.set(key, created);
+        image.onload = () => {
+          created.state = 'ready';
+          if (props.basemap === providerId) {
+            tileFailureCount = 0;
+            basemapNotice.value = '';
+          }
+          requestRender();
+        };
+        image.onerror = () => {
+          created.state = 'error';
+          if (props.basemap === providerId) {
+            tileFailureCount++;
+            if (tileFailureCount >= 3) basemapNotice.value = '底图瓦片加载失败；线路与断点仍按 WGS84 显示';
+          }
+          requestRender();
+        };
+        image.src = provider.tileUrl(zoom, x, y);
+      }
+      if (entry.state === 'ready') ready++;
+      else if (entry.state === 'error') failed++;
+      if (entry.state !== 'ready') continue;
+      const sx = width / 2 + (x * tileWorld - view.value.cx) * view.value.scale;
+      const sy = height / 2 + (y * tileWorld - view.value.cy) * view.value.scale;
+      ctx.drawImage(entry.image, sx, sy, tileScreen + 0.6, tileScreen + 0.6);
+    }
+  }
+  if (ready === 0 && failed > 0) basemapNotice.value = '底图瓦片加载失败；线路与断点仍按 WGS84 显示';
+  if (tileCache.size > 480) {
+    for (const [key, entry] of tileCache) {
+      if (entry.state !== 'loading') tileCache.delete(key);
+      if (tileCache.size <= 360) break;
+    }
+  }
+  if (ready > 0) {
+    // Keep the street layer subdued; satellite also gets a light scrim so bright
+    // terrain does not swallow the rail overlay.
+    ctx.fillStyle = props.basemap === 'satellite' ? 'rgba(5, 11, 8, .28)' : 'rgba(7, 12, 9, .42)';
+    ctx.fillRect(0, 0, width, height);
+    ctx.font = '9px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    const text = provider.attribution;
+    const textWidth = ctx.measureText(text).width;
+    ctx.fillStyle = 'rgba(10, 15, 11, .72)';
+    ctx.fillRect(width - textWidth - 14, height - 64, textWidth + 8, 14);
+    ctx.fillStyle = 'rgba(229, 238, 224, .72)';
+    ctx.fillText(text, width - textWidth - 10, height - 53);
+  }
 }
 
 function linePath(path: Path2D, color: string, width: number, dash: number[] = []): void {
@@ -206,10 +295,11 @@ function drawGrid(): void {
   const south = Math.min(topLeft.lat, bottomRight.lat);
   const span = Math.max(east - west, north - south);
   const step = niceStep(span / 8);
+  const hasBasemap = props.basemap !== 'none';
   ctx.save();
   ctx.font = '10px system-ui, sans-serif';
-  ctx.fillStyle = 'rgba(221, 235, 212, .4)';
-  ctx.strokeStyle = 'rgba(216, 255, 98, .07)';
+  ctx.fillStyle = hasBasemap ? 'rgba(240, 247, 234, .78)' : 'rgba(221, 235, 212, .4)';
+  ctx.strokeStyle = hasBasemap ? 'rgba(216, 255, 98, .14)' : 'rgba(216, 255, 98, .07)';
   ctx.lineWidth = 1;
   const startLon = Math.ceil(west / step) * step;
   const startLat = Math.ceil(south / step) * step;
@@ -231,8 +321,9 @@ function drawGrid(): void {
     const label = Math.abs(step) < 0.01 ? lat.toFixed(4) : Math.abs(step) < 0.1 ? lat.toFixed(3) : lat.toFixed(2);
     ctx.fillText(`${label}°N`, 8, y - 4);
   }
-  // Scale bar: one projected degree is about 111.32 km at this schematic scale.
-  const metresPerPixel = 111_320 / view.value.scale;
+  // Scale bar in metres at the map centre; Web Mercator scale varies with latitude.
+  const centre = lonLatAt(width / 2, height / 2);
+  const metresPerPixel = metresPerWorldUnit(centre.lat) / view.value.scale;
   const choices = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000];
   const target = metresPerPixel * 120;
   const metres = choices.reduce((best, value) => Math.abs(value - target) < Math.abs(best - target) ? value : best, choices[0]);
@@ -356,6 +447,7 @@ function draw(): void {
   gradient.addColorStop(1, '#101811');
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, width, height);
+  if (props.segments.length) drawBasemap();
   drawGrid();
   if (!props.segments.length) {
     ctx.fillStyle = 'rgba(221, 235, 212, .45)';
@@ -463,6 +555,11 @@ watch(() => [props.segments, props.contextSegments], () => {
   fit();
 }, { flush: 'post' });
 watch(() => [props.breaks, props.filteredLinks, props.selectedId, props.showFiltered, props.showBridgeTunnel, props.showIsolated], requestRender);
+watch(() => props.basemap, () => {
+  basemapNotice.value = '';
+  tileFailureCount = 0;
+  requestRender();
+});
 watch(() => props.selectedId, () => { hoverId.value = null; requestRender(); });
 
 onMounted(() => {
@@ -475,6 +572,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   resizeObserver?.disconnect();
   cancelAnimationFrame(renderFrame);
   window.removeEventListener('resize', resize);
@@ -495,6 +593,7 @@ defineExpose({ fit, focus, zoomIn, zoomOut });
       <button title="缩小" @click="zoomOut">−</button>
       <button title="适合省域" @click="fit">⤢</button>
     </div>
+    <div v-if="basemapNotice" class="map-basemap-status">{{ basemapNotice }}</div>
     <div class="map-cursor">{{ cursor ? `${cursor.lon.toFixed(5)}, ${cursor.lat.toFixed(5)}` : '拖拽平移 · 滚轮缩放 · 点击断点查看详情' }}</div>
   </div>
 </template>
@@ -509,5 +608,6 @@ canvas:active { cursor: grabbing; }
 .map-controls { position: absolute; top: 14px; right: 14px; display: flex; flex-direction: column; gap: 4px; }
 .map-controls button { width: 32px; height: 32px; border: 1px solid rgba(255,255,255,.18); background: rgba(14, 20, 15, .9); color: #d8ff62; font-size: 15px; }
 .map-controls button:hover { border-color: #d8ff62; }
+.map-basemap-status { position: absolute; left: 50%; bottom: 14px; max-width: 60%; padding: 5px 8px; border: 1px solid rgba(255, 179, 71, .35); background: rgba(24, 18, 10, .9); color: #ffcc8a; font-size: 9px; transform: translateX(-50%); pointer-events: none; }
 .map-cursor { position: absolute; left: 14px; bottom: 14px; padding: 5px 8px; border: 1px solid rgba(255,255,255,.12); background: rgba(12, 18, 13, .82); color: #8e9b88; font-family: ui-monospace, monospace; font-size: 9px; pointer-events: none; }
 </style>

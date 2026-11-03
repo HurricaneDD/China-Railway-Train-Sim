@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RailNetwork } from '../src/data/railway';
 import { fetchJson } from '../src/utils/assets';
 import type { ProvinceInfo } from '../src/types';
-import { analyzeProvince } from '../dev/raliway-check/analysis';
+import { analyzeProvince } from '../dev/railway-check/analysis';
 
 vi.mock('../src/utils/assets', () => ({ fetchJson: vi.fn() }));
 const province = { adcode: '320000', province: '江苏省', file: 'x' } as ProvinceInfo;

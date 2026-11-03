@@ -27,7 +27,7 @@ npm run preview
 
 ## 线路人工检查
 
-新增只读检查页 `dev/raliway-check/`，按省读取当前正式 GeoJSON，用红色标出存在被过滤连接的断点、橙色标出邻近未接入、灰色标出孤立端点，并显示桥梁/隧道区段和弱连通分量。开发环境访问 `http://localhost:5173/dev/raliway-check/`；生产构建输出 `dist/dev/raliway-check/index.html`。详细说明见 [检查页 README](dev/raliway-check/README.md) 和 [拓扑规则](docs/RAILWAY-TOPOLOGY.md)。
+新增只读检查页 `dev/railway-check/`，按省读取当前正式 GeoJSON，用红色标出存在被过滤连接的断点、橙色标出邻近未接入、灰色标出孤立端点，并显示桥梁/隧道区段和弱连通分量。检查页可切换街道/卫星底图；底图采用 WGS84 基准的 Web Mercator（EPSG:3857），线路与断点按同一投影直接叠加，不做 GCJ-02 偏移。开发环境访问 `http://localhost:8062/dev/railway-check/`；生产构建输出 `dist/dev/railway-check/index.html`。详细说明见 [检查页 README](dev/railway-check/README.md) 和 [拓扑规则](docs/RAILWAY-TOPOLOGY.md)。
 
 桥隧只由 OSM 标签 `bridge === 'T'` / `tunnel === 'T'` 识别，不做结构检测。2026-11-02 修正了共享端点因桥隧/`layer` 标签差异被误断的问题；江苏实测弱连通分量由 469 降至 100，但仍有站场尽端、原始缺口等孤立端点需要人工核查。
 

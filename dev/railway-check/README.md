@@ -1,4 +1,4 @@
-# 线路人工检查（dev/raliway-check）
+# 线路人工检查（dev/railway-check）
 
 这是一个独立的线路拓扑人工检查页，用于分省核对当前运行数据中的正线断点、被过滤的端点连接和桥隧/层级过渡。它只读取 `data/` 下的正式分省 GeoJSON，不修改原始数据、不生成存档，也不参与驾驶。
 
@@ -8,13 +8,25 @@
 
 ```bash
 npm run dev
-# http://localhost:8062/dev/raliway-check/
-# 外部访问示例：http://fangxx.fun:8062/dev/raliway-check/
+# http://localhost:8062/dev/railway-check/
+# 外部访问示例：http://fangxx.fun:8062/dev/railway-check/
 ```
 
-末尾的 `/` 不能省略。开发服务器会对 `/dev/raliway-check`（无尾斜杠）返回 302 跳转到带斜杠地址；若使用旧进程或把该路径交给普通静态服务器的 SPA 回退，可能显示主应用首页。主应用的“设置 → 数据来源与许可”也提供入口。
+末尾的 `/` 不能省略。开发服务器会对 `/dev/railway-check`（无尾斜杠）返回 302 跳转到带斜杠地址；若使用旧进程或把该路径交给普通静态服务器的 SPA 回退，可能显示主应用首页。主应用的“设置 → 数据来源与许可”也提供入口。
 
-生产构建会把页面输出到 `dist/dev/raliway-check/index.html`。该页面不加载 Cesium；`vite.config.ts` 中的 `railway-check-html` 插件会移除 Cesium 插件注入到该嵌套页面的静态标签，避免相对路径 404。
+生产构建会把页面输出到 `dist/dev/railway-check/index.html`。该页面不加载 Cesium；`vite.config.ts` 中的 `railway-check-html` 插件会移除 Cesium 插件注入到该嵌套页面的静态标签，避免相对路径 404。
+
+## 底图与坐标系
+
+检查页提供三种底图模式：
+
+- **街道**：Esri World Street Map，加暗色遮罩，便于叠加线路。
+- **卫星**：Esri World Imagery。
+- **无**：仅显示深色网格和线路，适合底图服务不可用时继续检查。
+
+两种在线底图都是标准 WGS84 基准的 Web Mercator（EPSG:3857）瓦片。线路、断点、车站类数据本身是 WGS84（EPSG:4326），页面用标准 Web Mercator 公式直接投影，**不经过 GCJ-02/BD-09 偏移**，因此不会出现高德/腾讯底图上常见的数百米错位。底图归属信息绘制在画布右下角，用户可在“无”模式关闭外部瓦片请求。
+
+底图瓦片可能因网络或服务策略失败；失败时页面显示提示，线路和断点仍按 WGS84 投影显示。`basemap.ts` 定义瓦片源，`mercator.ts` 定义投影和瓦片级别选择。
 
 ## 数据与计算
 
@@ -47,4 +59,4 @@ npm test
 npm run build
 ```
 
-`tests/railway-check.test.ts` 覆盖共享端点桥隧/层级过渡、0.55 m 间隙断点识别和孤立端点分类。页面已在开发服务器和无 Cesium 的生产构建中实际加载；完整浏览器驾驶验收仍以主应用为准。
+`tests/railway-check.test.ts` 覆盖共享端点桥隧/层级过渡、0.55 m 间隙断点识别和孤立端点分类；`tests/mercator.test.ts` 覆盖 WGS84/Web Mercator 往返、瓦片层级和底图 URL。页面已在开发服务器和无 Cesium 的生产构建中实际加载；完整浏览器驾驶验收仍以主应用为准。

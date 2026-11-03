@@ -4,6 +4,7 @@ import { neighboringProvinces } from '../../src/data/province-neighbors';
 import { RailwayRepository, type JsonFetcher } from '../../src/data/railway';
 import type { ProvinceInfo, RailSegment } from '../../src/types';
 import { analyzeProvince, type BreakGroup, type BreakKind, type ProvinceAnalysis } from './analysis';
+import type { BasemapId } from './basemap';
 import RailwayMap from './RailwayMap.vue';
 
 type Category = 'priority' | 'all' | 'filtered' | 'nearby' | 'isolated';
@@ -23,6 +24,7 @@ const selectedId = ref<string | null>(null);
 const showFiltered = ref(false);
 const showBridgeTunnel = ref(true);
 const showIsolated = ref(true);
+const basemap = ref<BasemapId>('street');
 const category = ref<Category>('priority');
 const query = ref('');
 const limit = ref(160);
@@ -209,7 +211,7 @@ function exportReport(): void {
   if (!analysis.value || !provinceInfo.value) return;
   const payload = {
     generatedAt: new Date().toISOString(),
-    tool: 'dev/raliway-check',
+    tool: 'dev/railway-check',
     caveat: '派生几何诊断，不是真实铁路调度、信号或工程测量结论；断点为当前驾驶拓扑无可行驶出边的位置。',
     province: provinceInfo.value,
     stats: analysis.value.stats,
@@ -280,6 +282,14 @@ onMounted(async () => {
           <input v-model="query" type="search" placeholder="搜索线路名 / 区段 ID / OSM ID" @input="limit = 160" />
           <button title="适合省域" @click="mapRef?.fit()">⤢</button>
         </div>
+        <div class="basemap-row">
+          <div class="basemap-caption"><span>地图底图</span><small>WGS84 / EPSG:3857 · 不做 GCJ-02 偏移</small></div>
+          <div class="basemap-tabs" role="group" aria-label="地图底图">
+            <button :class="{ active: basemap === 'street' }" @click="basemap = 'street'">街道</button>
+            <button :class="{ active: basemap === 'satellite' }" @click="basemap = 'satellite'">卫星</button>
+            <button :class="{ active: basemap === 'none' }" @click="basemap = 'none'">无</button>
+          </div>
+        </div>
         <div class="category-tabs" role="group" aria-label="断点筛选">
           <button :class="{ active: category === 'priority' }" @click="setCategory('priority')">重点 {{ priorityCount }}</button>
           <button :class="{ active: category === 'all' }" @click="setCategory('all')">全部 {{ stats?.groups ?? 0 }}</button>
@@ -327,6 +337,7 @@ onMounted(async () => {
         :show-filtered="showFiltered"
         :show-bridge-tunnel="showBridgeTunnel"
         :show-isolated="showIsolated"
+        :basemap="basemap"
         @select="onMapSelect"
       />
       <button class="sidebar-toggle" @click="sidebarOpen = !sidebarOpen">{{ sidebarOpen ? '收起列表' : '展开列表' }}</button>

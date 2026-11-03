@@ -33,14 +33,15 @@ npx vite-node scripts/railway-diagnostics.ts 320000
 
 ## 断点人工检查
 
-`dev/raliway-check/` 提供分省只读检查页（开发地址 `/dev/raliway-check/`，构建输出 `dist/dev/raliway-check/`）：
+`dev/railway-check/` 提供分省只读检查页（开发地址 `/dev/railway-check/`，构建输出 `dist/dev/railway-check/`）：
 
 - 按省加载当前正式 GeoJSON，显示普通/桥/隧区段；
+- 提供街道、卫星和无底图三种模式。街道使用 Esri World Street Map，卫星使用 Esri World Imagery；两者都是 WGS84 基准的 Web Mercator（EPSG:3857）瓦片。线路、断点与最近线路本身是 WGS84（EPSG:4326），按标准 Web Mercator 公式直接投影，**不做 GCJ-02/BD-09 偏移**；
 - 以红色标出“存在被过滤连接”的断点，橙色标出“邻近线路未接入”，灰色标出孤立端点；
 - 点击断点查看来路区段、被拒候选的角度/间隙/属性、最近线路和 OSM ID；
-- 可加载相邻省份复核省界，可导出本省断点 JSON。
+- 可加载相邻省份复核省界，可导出本省断点 JSON。底图加载失败时提示并回退到深色网格，线路和断点仍可检查。
 
-该页与驾驶共用 `RailNetwork.connectionsAt/nextBoundary`，不修改正式数据。检查页的断点分组、最近线路和弱分量统计仍是几何启发式；修复原始数据后必须重新加载并重新驾驶验证。详细说明见 `dev/raliway-check/README.md`。
+该页与驾驶共用 `RailNetwork.connectionsAt/nextBoundary`，不修改正式数据。底图只用于空间参考，不参与距离、断点或弱分量计算；检查页的断点分组、最近线路和弱分量统计仍是几何启发式；修复原始数据后必须重新加载并重新驾驶验证。详细说明见 `dev/railway-check/README.md`。
 
 ## 路径预览
 
