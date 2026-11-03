@@ -9,20 +9,6 @@ export const APP_CONFIG = {
     renderRadius: 6500,
     maxRenderSegments: 900,
   },
-  stationDeparture: {
-    /** Tracks whose nearest point is within this radius of the station are candidates. */
-    trackRadius: 1200,
-    /** Displayed length of each track around the station, in both directions. */
-    trackWindowMeters: 650,
-    /** Hard cap for selectable tracks; the list is ordered by distance from the station. */
-    maxTracks: 60,
-    /** Initially rendered/listed tracks; the dialog can reveal the rest up to maxTracks. */
-    initialTracks: 24,
-    /** Nearby geometry drawn only for context, never selectable. */
-    maxContextSegments: 240,
-    /** Reference point for the heuristic up/down (上行/下行) direction. */
-    upReference: { lon: 116.4074, lat: 39.9042 },
-  },
   track: {
     gauge: 1.435,
     sleeperSpacing: 12,

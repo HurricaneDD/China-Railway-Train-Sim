@@ -60,18 +60,6 @@ export class GameSession {
     return snapped;
   }
 
-  /**
-   * Start from a track chosen in the station departure diagram. The caller has
-   * already loaded the province and resolved the original segment and offset.
-   */
-  startOnTrack(segmentId: string, offset: number, direction: 1 | -1): LonLat {
-    const segment = this.railway.network.segments.get(segmentId);
-    if (!segment) throw new Error('所选股道不存在，请重新选择');
-    const clamped = Math.max(0, Math.min(segment.length, offset));
-    this.beginTrip(segmentId, clamped, direction);
-    return pointAt(segment, clamped);
-  }
-
   private beginTrip(segmentId: string, offset: number, direction: 1 | -1): void {
     const segment = this.railway.network.segments.get(segmentId);
     if (!segment) throw new Error('出发区段不存在');

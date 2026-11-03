@@ -3,8 +3,8 @@ import type { MapView } from './junctionMap';
 import { metresPerWorldUnit, tileZoomForScale } from '../utils/mercator';
 
 /**
- * Shared canvas layers for the 2D Web Mercator views (junction prompt and
- * station departure diagram). Railway geometry stays WGS84; the raster tiles
+ * Shared canvas layers for the 2D Web Mercator view in the junction prompt.
+ * Railway geometry stays WGS84; the raster tiles
  * are standard EPSG:3857 and are only a visual reference.
  */
 
