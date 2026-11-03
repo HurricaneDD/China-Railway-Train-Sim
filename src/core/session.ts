@@ -56,8 +56,26 @@ export class GameSession {
     await this.railway.load(province);
     const snapped = this.railway.network.nearest(point, maxDistance);
     if (!snapped) throw new Error(`附近 ${Math.round(maxDistance)} 米内没有可用国铁线路，请重新选择`);
-    province = this.railway.network.segments.get(snapped.segmentId)!.properties.province;
-    this.position = { province, segmentId: snapped.segmentId, offset: snapped.offset, direction: 1, travelled: 0 };
+    this.beginTrip(snapped.segmentId, snapped.offset, 1);
+    return snapped;
+  }
+
+  /**
+   * Start from a track chosen in the station departure diagram. The caller has
+   * already loaded the province and resolved the original segment and offset.
+   */
+  startOnTrack(segmentId: string, offset: number, direction: 1 | -1): LonLat {
+    const segment = this.railway.network.segments.get(segmentId);
+    if (!segment) throw new Error('所选股道不存在，请重新选择');
+    const clamped = Math.max(0, Math.min(segment.length, offset));
+    this.beginTrip(segmentId, clamped, direction);
+    return pointAt(segment, clamped);
+  }
+
+  private beginTrip(segmentId: string, offset: number, direction: 1 | -1): void {
+    const segment = this.railway.network.segments.get(segmentId);
+    if (!segment) throw new Error('出发区段不存在');
+    this.position = { province: segment.properties.province, segmentId, offset, direction, travelled: 0 };
     this.train = initialTrainState();
     this.train.brakeCommand = this.train.brakeActual = 100;
     this.train.brakePipe = 430;
@@ -84,7 +102,6 @@ export class GameSession {
     void this.refreshSlope();
     void this.loadNearbyProvinces();
     this.onUpdate?.();
-    return snapped;
   }
 
   async restore(save: GameSave): Promise<void> {
@@ -412,14 +429,35 @@ export class GameSession {
     });
     this.clearControls();
     const current = this.railway.network.segments.get(segmentId)!;
-    const incomingBearing = bearing(pointAt(current, boundary.offset - Math.sign(direction) * 10), pointAt(current, boundary.offset));
+    const at = pointAt(current, boundary.offset);
+    const incomingBearing = bearing(pointAt(current, boundary.offset - Math.sign(direction) * 10), at);
+    const approachAvailable = direction > 0 ? boundary.offset : current.length - boundary.offset;
+    const approachMeters = Math.min(APP_CONFIG.simulation.junctionApproachMeters, Math.max(0, approachAvailable));
+    const incoming: LonLat[] = [];
+    const approachSteps = approachMeters > 0.5 ? Math.max(1, Math.ceil(approachMeters / 10)) : 0;
+    for (let index = 0; index <= approachSteps; index++) {
+      const behind = approachMeters * (1 - index / Math.max(1, approachSteps));
+      incoming.push(pointAt(current, boundary.offset - direction * behind));
+    }
+    if (!incoming.length) incoming.push(at);
+    // Nearby tracks give the prompt local yard context. The selected preview path remains the
+    // authoritative route; this background geometry is display-only and never a second connection rule.
+    const contextTracks = this.railway.network.segmentsNear(at, APP_CONFIG.simulation.junctionContextRadius,
+      APP_CONFIG.simulation.junctionContextMaxSegments, current.id).map((segment) => ({
+      segmentId: segment.id,
+      name: segment.properties.name === '未命名铁路' ? '未识别轨道' : segment.properties.name,
+      bridge: segment.properties.bridge,
+      tunnel: segment.properties.tunnel,
+      points: segment.points.map((point) => ({ lon: point.lon, lat: point.lat })),
+    }));
     const diagnostics = this.railway.network.connectionsAt(segmentId, boundary, direction).map(connection => ({
       ...connection, incoming: { segmentId, osmId: current.properties.osmId, properties: current.properties, direction },
       outgoing: this.railway.network.segments.get(connection.segmentId)?.properties,
       previewStop: options.find(option => option.segmentId === connection.key)?.stopReason,
     }));
     this.junction = { nodeId: boundary.nodeId, atSegmentEnd: direction > 0, options,
-      currentName: current.properties.name === '未命名铁路' ? '未识别轨道' : current.properties.name, incomingBearing, diagnostics };
+      currentName: current.properties.name === '未命名铁路' ? '未识别轨道' : current.properties.name, incomingBearing,
+      context: { center: at, incoming, tracks: contextTracks }, diagnostics };
     this.onUpdate?.();
   }
 

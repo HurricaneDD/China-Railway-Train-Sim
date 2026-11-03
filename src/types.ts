@@ -75,6 +75,56 @@ export interface SnapResult {
   distance: number;
 }
 
+/**
+ * One selectable starting track in the station departure view.
+ *
+ * The geometry comes from the original OSM rail segments; the numbered tracks
+ * are a UI grouping, not official track or platform numbering.
+ */
+export interface StationDepartureTrack {
+  segmentId: string;
+  name: string;
+  /** Metres from the station coordinate to the nearest point on this track. */
+  distance: number;
+  /** Nearest offset along the original segment (the departure point). */
+  offset: number;
+  segmentLength: number;
+  /** Coordinate-ascending tangent at the departure point. */
+  heading: number;
+  /** +1 when coordinate-ascending is the estimated up (toward Beijing) direction. */
+  upSign: 1 | -1;
+  /** Bearing of the estimated up direction at the departure point. */
+  upBearing: number;
+  /** Metres from the departure point to the next topology boundary in each direction. */
+  upBoundaryAhead: number;
+  downBoundaryAhead: number;
+  /** Whether at least one derived drivable exit exists at each boundary. */
+  upContinues: boolean;
+  downContinues: boolean;
+  bridge: boolean;
+  tunnel: boolean;
+  /** Local display polyline around the departure point. */
+  points: LonLat[];
+}
+
+export interface StationDepartureContextTrack {
+  segmentId: string;
+  points: LonLat[];
+}
+
+export interface StationDeparture {
+  station: Station;
+  center: LonLat;
+  /** Bearing from the station toward the up-direction reference (Beijing). */
+  towardBeijing: number;
+  tracks: StationDepartureTrack[];
+  /** Display-only nearby geometry, including tracks beyond the selectable cap. */
+  contextTracks: StationDepartureContextTrack[];
+  radius: number;
+  /** True when some nearby tracks were omitted from the selectable list. */
+  truncated: boolean;
+}
+
 export interface RoutePoint extends LonLat {
   height: number;
   heading: number;
@@ -95,12 +145,29 @@ export interface JunctionOption {
   reason: string;
 }
 
+export interface JunctionContextTrack {
+  segmentId: string;
+  name: string;
+  bridge: boolean;
+  tunnel: boolean;
+  points: LonLat[];
+}
+
+/** Static snapshot for the two-dimensional nearby-track map in the junction prompt. */
+export interface JunctionContext {
+  center: LonLat;
+  /** Approach geometry ordered from behind the train toward the junction. */
+  incoming: LonLat[];
+  tracks: JunctionContextTrack[];
+}
+
 export interface JunctionRequest {
   nodeId: string;
   atSegmentEnd: boolean;
   options: JunctionOption[];
   currentName: string;
   incomingBearing: number;
+  context: JunctionContext;
   diagnostics: unknown;
 }
 

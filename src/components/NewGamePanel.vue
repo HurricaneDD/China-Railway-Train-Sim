@@ -37,7 +37,7 @@ function choose(station: StationResult): void {
       <button :class="{ active: tab === 'map' }" @click="tab = 'map'">地图选点</button>
     </div>
     <div v-if="tab === 'station'" class="panel-body station-picker">
-      <p class="fine-print">全国线路开放 · 选择省份浏览，或<button class="text-button" @click="province = ''; city = ''">全国搜站</button></p>
+      <p class="fine-print">全国线路开放 · 选择省份浏览，或<button class="text-button" @click="province = ''; city = ''">全国搜站</button> · 选站后进入配线图选择方向与股道</p>
       <label class="search-field"><span>⌕</span><input v-model="query" placeholder="站名 / 电报码 / 旧称" autofocus /></label>
       <div class="filter-row">
         <select v-model="province" aria-label="按省份筛选" @change="chooseProvince">

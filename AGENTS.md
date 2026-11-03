@@ -12,7 +12,7 @@
 - 架构：Vue 3 + TypeScript + Vite + CesiumJS 的纯前端静态应用。
 - 运行与存档均在浏览器本地完成；无后端、无账号、无云数据库、无 Cookie 进度。
 - 部署目标：GitHub Pages 仓库子路径。Vite `base` 为 `./`，不硬编码仓库名。
-- 当前版本：Demo 0.2（全国自由驾驶）+ 线路人工检查工具；存档结构继续使用 V1；首次开发日期 2026-11-01。
+- 当前版本：Demo 0.2（全国自由驾驶 + 车站始发方向/股道选择）+ 线路人工检查工具；存档结构继续使用 V1；首次开发日期 2026-11-01。
 
 ## 2. 开发命令与依赖
 
@@ -60,8 +60,8 @@ China-Railway-Train-Sim-Kimi/
 │     ├─ Inspector.vue           分省加载、断点列表、详情与导出
 │     ├─ RailwayMap.vue          2D Canvas 线路与断点绘制
 │     ├─ analysis.ts             断点、被过滤连接、最近线路与弱分量分析
-│     ├─ basemap.ts              Esri 街道/卫星 WGS84 Web Mercator 瓦片源
-│     ├─ mercator.ts             EPSG:3857 投影、瓦片级别与米制比例
+│     ├─ basemap.ts              兼容导出：共享 WGS84 底图源
+│     ├─ mercator.ts             兼容导出：共享 EPSG:3857 投影工具
 │     ├─ style.css               检查页独立样式
 │     └─ README.md               使用方式、规则与限制
 ├─ .github/workflows/deploy.yml  GitHub Pages 自动构建部署
@@ -83,11 +83,15 @@ China-Railway-Train-Sim-Kimi/
 │  │  ├─ StartMenu.vue           开始/继续/设置入口
 │  │  ├─ NewGamePanel.vue        车站搜索、地区选择、地图选点
 │  │  ├─ DrivingHud.vue          速度、坡度、制动、黏着、换向等 HUD
-│  │  ├─ JunctionDialog.vue      必须主动选择的分岔弹窗
+│  │  ├─ JunctionDialog.vue      宽屏道岔选择：左侧配线图、右侧线路选项
+│  │  ├─ JunctionMap.vue         道岔二维配线图、Esri 底图与直接点线选择
+│  │  ├─ StationDepartureDialog.vue  车站始发：上行/下行、股道配线图与确认
+│  │  ├─ StationDepartureMap.vue     车站配线图 Canvas、股道点击与方向箭头
 │  │  ├─ SavePanel.vue           读取、删除、导入、导出和手动保存
 │  │  └─ SettingsPanel.vue       设置、键位说明、数据来源与许可
 │  ├─ data/
 │  │  ├─ stations.ts             车站读取、筛选、搜索、pending 处理
+│  │  ├─ stationDeparture.ts     车站周边股道快照、上行/下行方位推定
 │  │  └─ railway.ts              分省加载、GeoJSON 适配、空间索引、派生拓扑
 │  ├─ core/
 │  │  ├─ session.ts              固定步长循环、线路推进、分岔、编组路径历史
@@ -98,17 +102,23 @@ China-Railway-Train-Sim-Kimi/
 │  ├─ map/
 │  │  ├─ CesiumMap.ts            地球、影像、地形、站点、相机与地图拾取
 │  │  ├─ RailRenderer.ts         双钢轨和批量轨枕 Primitive
-│  │  └─ TrainRenderer.ts        浅绿机车、深绿车厢、位置与朝向回调
+│  │  ├─ TrainRenderer.ts        浅绿机车、深绿车厢、位置与朝向回调
+│  │  ├─ basemap.ts              主应用与检查页共享的 Esri WGS84 底图源
+│  │  ├─ canvasLayer.ts          二维图共享底图瓦片、网格、北箭头与比例尺
+│  │  └─ junctionMap.ts          道岔配线图视图适配、候选线命中与路径取点
 │  └─ utils/
 │     ├─ assets.ts               GitHub Pages 兼容的数据 URL 与 fetch
+│     ├─ mercator.ts             EPSG:3857 投影、瓦片级别与米制比例
 │     └─ geo.ts                  米制距离、方位角、线段投影、里程插值、轨距偏移
-└─ tests/
-   ├─ geo.test.ts                线段投影和里程
-   ├─ dynamics.test.ts           制动、惯性、坡度、黏着与撒砂
-   ├─ storage.test.ts            错误存档拒绝
-   ├─ railway-check.test.ts      检查页断点分类、间隙与桥隧过渡
-   ├─ mercator.test.ts           WGS84/Web Mercator 投影与底图 URL
-   └─ ...                        拓扑、会话、渲染、全国回归
+├─ tests/
+│  ├─ geo.test.ts                线段投影和里程
+│  ├─ dynamics.test.ts           制动、惯性、坡度、黏着与撒砂
+│  ├─ storage.test.ts            错误存档拒绝
+│  ├─ railway-check.test.ts      检查页断点分类、间隙与桥隧过渡
+│  ├─ mercator.test.ts           WGS84/Web Mercator 投影与底图 URL
+│  ├─ junction-map.test.ts       道岔配线图等比适配、线路命中与路径取点
+│  ├─ station-departure.test.ts  车站股道筛选、方向推定与指定股道始发
+│  └─ ...                        拓扑、会话、渲染、全国回归
 ```
 
 ## 4. 核心实现方法
@@ -200,9 +210,28 @@ China-Railway-Train-Sim-Kimi/
 - `analysis.ts` 复用 `RailNetwork.boundariesOf/connectionsAt/segmentsNear`，按省统计：无可行驶出边的断点组、被过滤的非掉头候选、100 m 内最近线路、桥/隧区段、弱连通分量。
 - 断点分类：红色 `filtered`（有被拒候选）、橙色 `nearby`（100 m 内有其它线路）、灰色 `isolated`（100 m 内没有其它线路）。接近掉头的候选不列为断点，因为应由换向处理。
 - `RailwayMap.vue` 使用 2D Canvas + 标准 Web Mercator 绘制原始区段（普通/桥/隧分色）和断点；`Inspector.vue` 负责分省加载、筛选、详情、复制坐标/JSON 和导出。`加载邻省` 会把相邻省份加入同一 `RailNetwork`，本次会话内不卸载。
-- 底图提供街道（Esri World Street Map）、卫星（Esri World Imagery）和无底图。两种在线底图均为 WGS84 基准的 EPSG:3857 瓦片；线路/断点是 WGS84 EPSG:4326，直接用 Web Mercator 公式投影，不做 GCJ-02/BD-09 纠偏。`basemap.ts` 定义瓦片 URL，`mercator.ts` 负责投影、米制比例和瓦片级别。底图失败时提示并回退深色网格。
+- 底图提供街道（Esri World Street Map）、卫星（Esri World Imagery）和无底图。两种在线底图均为 WGS84 基准的 EPSG:3857 瓦片；线路/断点是 WGS84 EPSG:4326，直接用 Web Mercator 公式投影，不做 GCJ-02/BD-09 纠偏。共享定义位于 `src/map/basemap.ts`，投影、米制比例和瓦片级别位于 `src/utils/mercator.ts`；检查页的同名文件只是兼容导出。底图失败时提示并回退深色网格。
 - 数据读取通过 `RailwayRepository`/`RailNetwork` 构造器注入的 `JsonFetcher`，页面用 `../../data/` 解析嵌套路径。Vite 多页面入口使用 `dev/railway-check/index.html`；`railway-check-html` 插件只在该页面移除 `vite-plugin-cesium` 注入的 Cesium CSS/JS 标签。
 - 检查页不是 Cesium 立体地形图：底图只是 2D 栅格参考，不显示立体桥梁、隧道洞口或真实纵断面；断点是派生拓扑输出，不能直接当作原始数据错误。
+
+### 4.10 道岔选择界面
+
+- `JunctionDialog.vue` 为宽屏双栏（桌面最大 1,180 px；≤940 px 纵向堆叠、≤620 px 紧凑布局）。左侧是附近配线图，右侧是候选线路、选中状态和确认按钮；列车在选择前保持冻结。
+- 打开道岔时，`GameSession.openJunction` 在原有 `JunctionOption.preview`（最多 2 km）之外，额外快照 `JunctionRequest.context`：以节点为中心、2 km 内最多 320 条邻近区段，以及沿来路最多 500 m 的接近几何。`context` 只用于绘图和点击命中，不参与 `drivableExits`/连接判定，也不写入存档或正式数据。
+- `JunctionMap.vue` 用 2D Canvas 按与检查页相同的 WGS84 → EPSG:3857 公式绘制底图、两侧线路和候选走线，默认卫星影像并可切换街道。地图北向上、横纵同尺度；显示比例尺、北箭头、Esri 归属、道岔节点和行驶方向箭头，底图瓦片失败时保留线路并提示。
+- 候选线路以青色绘制并在约 66% 路径处编号。点击画布时以 14 px 屏幕阈值命中最近的候选折线，选择结果与右侧选项双向同步；选中线路以荧光绿粗线、发光暗边和连续方向箭头标记，右侧卡片同步高亮，确认后沿用原有 `chooseJunction` 逻辑。
+- 底图瓦片缓存上限 480，CORS 使用 `anonymous`，离开弹窗后取消重绘。该地图没有平移/缩放控件，始终自动适配全部候选预览，避免把拖动误判成选线。
+
+### 4.11 车站始发：方向与始发股道
+
+- “车站出发”点击有坐标车站后不再立即开车，而是先打开 `StationDepartureDialog.vue`：先选上行/下行，再在左侧车站配线图点选始发股道，确认后才调用 `GameSession.startOnTrack` 放置列车。地图选点仍保持原有的直接吸附出发。
+- `src/data/stationDeparture.ts` 以车站坐标为中心读取 1,200 m 内最多 240 条原始国铁区段，按最近点距离排序，最多列出 60 条可选股道；配线图与列表初始显示 24 条，可通过“显示更多股道”扩展到 60 条。每条股道的显示折线只截取最近点两侧各 650 m，原始区段 ID、坐标、里程和拓扑关系均不改。
+- “股道”是把车站周边独立 OSM 区段作为候选的界面称呼，不推断站场分区、站台或官方股道号；同一 OSM 线路被节点切开的多个 part 仍分别列出。数据中没有站台、股道占用或联锁表时，不虚构编号或连接。
+- 上行/下行按几何方位推定：从该股道出发点指向北京的方位为参考，轨道坐标前进方向与参考方位夹角 ≤90° 视为上行，否则为下行。该结果只决定列车初始 `SavePosition.direction` 和界面箭头方向；存档仍为 V1，不代表真实行别、信号或调度。切换方向后配线图箭头、列表箭头和已选状态同步翻转。
+- 出发位置取所选股道距车站坐标最近点；列车以驻车、全制动、1× 倍速开始。列表同时显示到下一拓扑边界的距离以及该方向是否存在派生可行驶出口，减少“出发即遇到数据边界”的误选。
+- `StationDepartureMap.vue` 复用 `src/map/canvasLayer.ts`（瓦片、网格、北箭头、比例尺）和 `junctionMap.ts`（等比适配、点击命中、路径取点）：青色为可选股道并错位编号，灰色为仅作背景的周边轨道；选中后按所选方向绘制荧光绿箭头。地图不支持平移/缩放，底图失败时保留 WGS84 线路。
+- 共享 `canvasLayer.ts` 同时供道岔图使用，瓦片缓存上限 480；`JunctionMap.vue` 改用该模块后行为不变。道岔与车站两个列表的滚动容器均设为 `position: relative`，避免 `offsetTop` 相对 fixed 背景造成错误滚动。
+
 
 ## 5. GitHub Pages 构建与部署
 
@@ -233,6 +262,12 @@ Token 集中在 `src/config.ts` 的 `APP_CONFIG.cesiumIonToken`，初始化时�
 | 共享端点上的桥隧/`layer` 标签不同 | 不能因此切断正线。原始坐标重合（<0.01 m）且转角≤35°时保留为 `uncertain`；桥隧直连、桥与桥不同层、层差 2–3 也按几何连续性推定。非共享端点继续保守筛选。 |
 | 检查页嵌套路径 | 不能用主应用 `dataUrl`（BASE_URL 相对检查页会解析错）；通过 `JsonFetcher` 用 `../../data/`。Cesium 插件会向所有 HTML 注入标签，检查页需在 post 阶段剔除。 |
 | WGS84 线路叠加底图 | 只能用 WGS84 基准的 Web Mercator（EPSG:3857）瓦片，例如 Esri World Street Map / World Imagery。禁止使用 AMap、腾讯、Google 中国等 GCJ-02 底图；线路坐标不需要也不允许再做 GCJ-02 转换。 |
+| 道岔配线图与真实拓扑 | `JunctionRequest.context` 是弹窗打开时的显示快照，只能画图/命中选择；不能据此新增行驶出口、判定连通或写入存档。可行驶性仍只由 `connectionsAt`/`drivableExits` 决定。 |
+| 道岔图点击与拖动冲突 | 点击候选线按屏幕像素距离命中，阈值 14 px；底图地图不提供平移/缩放，避免拖动被当成选择。相近线路完全重合时使用右侧列表，不能声称图上可分辨。 |
+| 车站股道数据 | 正式数据只有车站坐标和 OSM 线路，没有官方股道、站台或联锁表。始发图只列车站 1,200 m 内最近 60 条原始区段，界面编号不是真实股道号；不得推断站场分组、虚构股道或连接。 |
+| 上行/下行推定 | 以轨道前进方向与“车站→北京”方位夹角 ≤90° 判为上行，只决定初始朝向；不新增存档字段、不代表真实行别或调度，线路实际行别可能相反。 |
+| 平行股道在配线图重叠 | 编号沿线路错位绘制、点击按 14 px 命中，右侧列表为准；两条线完全重合时图上不可分辨。 |
+| 列表滚动定位 | 滚动容器需 `position: relative`，否则 `offsetTop` 相对 fixed 背景，会滚到错误位置；车站与道岔列表均已修正。 |
 | 多页面构建 | `vite.config.ts` 必须同时列出主应用和 `dev/railway-check/index.html`；只加 HTML 不加 rollup 输入不会产出检查页。 |
 | 倍速直接乘物理 `dt` | 会改变动力学积分和事件判定；应放大累加器并继续按 1/60 s 固定步长 tick，限制每帧最大步数，切速清空积压。 |
 | 同名线路不代表同一要素 | 去重使用 osm_id + layer，不按名称删除。 |
@@ -298,6 +333,11 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - 检查页是只读 2D Canvas + 栅格底图诊断：街道/卫星底图只是空间参考，不显示立体桥梁、隧道洞口或真实纵断面；断点分组、100 m 邻近线路和弱分量均为几何启发式。江苏加载后仍有 1,722 个几何孤立端点，未逐个核验；其中可能包含真实站场尽端、支线终点、>2 m 原始缺口或省界断点。
 - 检查页加载邻省后本次会话不卸载，后续分析会继续使用已加载数据；不加载邻省时省界断点可能误报。检查页未实现断点聚合/聚合展开，省域缩放下标记可能重叠；触摸缩放和超长省份性能未验收。
 - 检查页底图依赖 Esri 在线瓦片，离线或服务不可用时显示提示并回退到深色网格；未内置离线瓦片缓存。底图只做显示，不参与距离和拓扑计算。
+- 道岔配线图依赖同一个 Esri 在线服务，底图失败时仍显示 WGS84 线路；弹窗没有底图离线包、平移或缩放。附近区段快照限制为节点周围 2 km、最多 320 条，候选预览最多 2 km，超出范围的股道不会显示。
+- 道岔图上的线路点击只按屏幕距离吸附到已有候选，不能从底图或邻近股道创造新连接；两条候选线完全重合时图上难以区分，需用右侧列表。底图和箭头是几何提示，不代表真实联锁、信号开放、股道编号或现场可通行。
+- 车站始发没有真实站场分组、股道、站台、股道占用或联锁数据：1,200 m 半径、60 条上限、650 m 显示窗口和初始 24 条都是界面近似；超过 60 条的股道不会列出，显示窗口外的股道不可见。大站平行股道密集时编号仍可能重叠，需用右侧列表；不计算站场归属，站中心距不是站台停车标距离。
+- 上行/下行按“朝向北京”的几何方位推定，对行别另有规定的线路可能相反；它只决定初始朝向，不替代真实行别、调度、信号或行车凭证。
+- 车站配线图依赖 Esri 在线瓦片，弹窗没有平移/缩放和离线瓦片包；底图失败时仅保留 WGS84 线路。真实数据验证以南京南为主，未遍历全国各站，也未验证所有密集站场、曲线股道和长站台。
 - 20× 倍速下坡度采样、邻省预载和自动保存按真实时间节流，长距离高速行驶时地形坡度滞后；倍速不改变动力学模型和真实铁路纵断面边界。
 - 显式省份邻接表辅助预载，不代表真实跨省铁路路径；省界实际续接仍以原始共享位置为准。
 - 已加载省份会保留在当前会话内；`maxCachedProvinces` 参数尚预留，未实现内存压力下的自动卸载。
@@ -318,7 +358,7 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 3. 修改物理时保持其不依赖 Cesium/Vue，并补 Vitest。
 4. 修改数据结构时更新存档版本及迁移/校验，不让错误导入覆盖有效存档。
 5. 修改部署配置后检查仓库子路径、中文 GeoJSON URL 和 Cesium 静态资源。
-6. 修改 UI 后实际测试：开始新游戏、车站出发、地图选点、牵引/制动/换向、分岔、保存恢复、导入导出；倍速改动需至少检查 1× 与 20× 的模拟时间推进。
+6. 修改 UI 后实际测试：开始新游戏、车站出发（上行/下行、配线图/列表选股道、确认后的朝向与驻车）、地图选点、牵引/制动/换向、分岔、保存恢复、导入导出；倍速改动需至少检查 1× 与 20× 的模拟时间推进。
 7. 修改拓扑或断点规则后，运行 `npx vite-node scripts/railway-diagnostics.ts <adcode>` 并打开 `/dev/railway-check/` 对照红色/橙色断点和真实数据；修复必须区分“规则误断”和“原始 OSM 缺口”。
 8. 完成后在下方更新日志追加日期、变更和验证结果；发现新限制同步更新第 9 节。
 
@@ -446,3 +486,27 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - `SettingsPanel.vue` 的“数据来源与许可”增加“打开检查页 ↗”链接，直接指向 `./dev/railway-check/`，生产子路径下同样可用。
 - `dev/railway-check/README.md` 更新为 8062 端口并强调末尾斜杠。
 - 验证：`curl` 确认 302 和跳转后的标题为“线路人工检查”；`npm run build` 通过（检查页仍不含 Cesium 标签）。
+
+### 2026-11-03 — 道岔宽屏配线图与点击选线
+
+- 道岔提示框由 540 px 单栏改为最大 1,180 px 的双栏界面：左侧为更大、可交互的附近配线图，右侧为候选线路卡片、选中状态和确认按钮；≤940 px 自动纵向排列，≤620 px 使用紧凑地图与 310 px 图高。
+- 新增 `JunctionMap.vue` 和共享 `src/map/junctionMap.ts`：以标准 Web Mercator 等比绘制来路、候选预览和节点周围 2 km 内最多 320 条邻近线路，支持卫星/街道 Esri 底图、比例尺、北箭头、编号与方向箭头。点击候选线按 14 px 屏幕阈值选择，右侧列表与地图双向同步。
+- 选中后左侧绘制荧光绿粗线、暗色描边和连续箭头，并同步右下角“已标记”状态；确认流程继续复用 `GameSession.chooseJunction`，不改存档 V1、正式数据或拓扑连接规则。`JunctionRequest` 新增仅在内存中的 `context` 显示快照。
+- 抽离共享底图与投影：新增 `src/map/basemap.ts`、`src/utils/mercator.ts`；`dev/railway-check/basemap.ts` 和 `mercator.ts` 改为兼容导出，避免主应用与检查页维护两套 WGS84 底图定义。
+- `npm test`：14 个测试文件、71 项通过；新增 `junction-map.test.ts` 3 项（等比适配、点击命中阈值、路径长度取点）和会话 context 快照 1 项。`npm run build` 通过，主页面与检查页产物均正常。
+- 使用完整主应用（headless Chromium 关闭 WebGL，避开 SwiftShader 干扰）加载广东真实线路并在广州南附近真实道岔打开提示：弹窗 1,180×774、地图 714×544、147 条邻近线路、2 个候选；点击地图候选线 02 后右侧同步选中且确认按钮启用，确认后 `preferredNext` 设为对应区段、弹窗关闭，控制台无应用错误。另用独立 Vite 预览页验证卫星底图、绿色走线/方向箭头和 390×844 纵向布局，内部滚动可达确认按钮。
+- 主应用验证是通过实际数据加载后程序化设定列车位置并打开真实节点，不是从车站自然行驶触发；本轮未重新执行长时间实线驾驶，也未验证真实触摸、离线底图和所有重叠股道。
+- 正式 `data/` 未修改；`output/` 下预览与截图不进入版本控制。
+
+### 2026-11-03 — 车站始发：上行/下行与始发股道配线图
+
+- “车站出发”改为两步：选择车站后打开 `StationDepartureDialog.vue`，先选上行/下行，再在车站配线图或右侧股道列表选择始发股道，确认后才进入驾驶；地图选点保持原有直接吸附。
+- 新增 `src/data/stationDeparture.ts`：以车站坐标读取 1,200 m 内原始国铁区段，按最近点距离排序，最多列出 60 条股道；显示折线只截取最近点两侧各 650 m，原始坐标、区段 ID 和拓扑不变。界面初始显示 24 条，可“显示更多股道”扩展到 60 条。
+- 上行/下行按“从股道出发点指向北京”的几何方位推定；切换方向同步翻转配线图箭头、列表箭头和选中状态。该推定只设置初始朝向，不改变存档 V1，并在界面和文档中明确不代表真实行别、信号或调度。
+- `GameSession.startOnTrack(segmentId, offset, direction)` 支持按所选股道与朝向出发；复用原有驻车、全制动、历史与倍速初始化，`startAt` 行为不变。
+- 新增 `StationDepartureMap.vue`：Canvas + 标准 Web Mercator，卫星/街道 Esri 底图，青色可选股道、错位编号、灰色周边轨道、车站标记、北箭头、比例尺、14 px 点击命中与方向箭头；选中后按下行/上行绘制荧光绿走线。底图失败时保留线路。
+- 抽取 `src/map/canvasLayer.ts` 共享底图瓦片、网格、北箭头和比例尺，`JunctionMap.vue` 改用该模块；修复车站与道岔列表滚动容器缺少 `position: relative` 导致选中行滚到错误位置的问题。
+- `npm test`：15 个测试文件、78 项通过；新增 `tests/station-departure.test.ts` 7 项，覆盖股道距离排序、上下行方向推定、650 m 窗口、60 条截断、指定股道方向/朝向与非法区段。`npm run build` 通过。
+- 开发服务器 + headless Chromium 实测：南京南显示 60 条可选股道；点击配线图青色线路命中第 20 条“京沪高铁”，右侧同步选中并滚动到该行；切下行后箭头由东北翻为西南；确认后 HUD 出现“已从南京南站下行方向始发”，列车驻车。另验证“显示更多”24→48→60、390×844 布局可滚动到方向和股道列表，控制台无应用错误。
+- 同一轮从南京南按新流程始发，以 20× 和满牵引行驶约 7 秒自然触发真实道岔：道岔弹窗显示 2 条候选、卫星底图、比例尺与归属，确认共享 `canvasLayer.ts` 重构未破坏原道岔配线图；控制台无应用错误。
+- 正式 `data/` 未修改；`output/` 下脚本与截图不进入版本控制。已知限制见第 9 节及 `docs/DEVELOPMENT-STATE.md`。
