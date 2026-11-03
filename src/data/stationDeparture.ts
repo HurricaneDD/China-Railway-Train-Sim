@@ -43,16 +43,12 @@ export function trackWindow(segment: RailSegment, offset: number, halfWindow: nu
   return points;
 }
 
-function toTrack(network: RailNetwork, segment: RailSegment, center: LonLat): StationDepartureTrack | undefined {
+function toTrack(segment: RailSegment, center: LonLat): StationDepartureTrack | undefined {
   const snapped = nearestOnSegment(segment, center);
   if (!snapped) return undefined;
   const at = pointAt(segment, snapped.offset);
   const upSign = estimatedUpSign(at, at.heading);
   const upBearing = upSign > 0 ? at.heading : (at.heading + 180) % 360;
-  const upBoundary = network.nextBoundary(segment.id, snapped.offset, upSign);
-  const downBoundary = network.nextBoundary(segment.id, snapped.offset, -upSign);
-  const upBoundaryAhead = upBoundary ? Math.abs(upBoundary.offset - snapped.offset) : Infinity;
-  const downBoundaryAhead = downBoundary ? Math.abs(downBoundary.offset - snapped.offset) : Infinity;
   return {
     segmentId: segment.id,
     name: segment.properties.name,
@@ -62,10 +58,6 @@ function toTrack(network: RailNetwork, segment: RailSegment, center: LonLat): St
     heading: at.heading,
     upSign,
     upBearing,
-    upBoundaryAhead,
-    downBoundaryAhead,
-    upContinues: upBoundary ? network.drivableExits(segment.id, upBoundary, upSign).length > 0 : false,
-    downContinues: downBoundary ? network.drivableExits(segment.id, downBoundary, -upSign).length > 0 : false,
     bridge: segment.properties.bridge,
     tunnel: segment.properties.tunnel,
     points: trackWindow(segment, snapped.offset, APP_CONFIG.stationDeparture.trackWindowMeters),
@@ -81,7 +73,7 @@ export function buildStationDeparture(network: RailNetwork, station: Station): S
     return { segmentId: segment.id, points: trackWindow(segment, snapped?.offset ?? 0, config.trackWindowMeters) };
   });
   const allTracks = nearby
-    .map((segment) => toTrack(network, segment, center))
+    .map((segment) => toTrack(segment, center))
     .filter((track): track is StationDepartureTrack => !!track)
     .sort((a, b) => a.distance - b.distance || b.segmentLength - a.segmentLength);
   const tracks = allTracks.slice(0, config.maxTracks);

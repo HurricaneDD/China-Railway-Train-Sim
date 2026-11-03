@@ -32,20 +32,6 @@ function travelBearing(track: StationDepartureTrack): number {
   return departureBearing(track, up.value);
 }
 
-function boundaryAhead(track: StationDepartureTrack): number {
-  return up.value ? track.upBoundaryAhead : track.downBoundaryAhead;
-}
-
-function continues(track: StationDepartureTrack): boolean {
-  return up.value ? track.upContinues : track.downContinues;
-}
-
-function boundaryText(track: StationDepartureTrack): string {
-  const ahead = boundaryAhead(track);
-  if (ahead < 1) return continues(track) ? '出发点位于拓扑节点' : '出发方向没有接续';
-  return `前方 ${Math.round(ahead)} m ${continues(track) ? '可接续' : '线路数据边界'}`;
-}
-
 function selectTrack(segmentId: string): void {
   selected.value = segmentId;
 }
@@ -156,8 +142,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
               <span class="track-arrow" :style="{ transform: `rotate(${travelBearing(track)}deg)` }" aria-hidden="true">↑</span>
               <span class="track-copy">
                 <span class="track-title"><strong>{{ displayName(track) }}</strong><em>{{ Math.round(track.segmentLength) }} m</em></span>
-                <span class="track-meta">距站 {{ Math.round(track.distance) }} m · {{ boundaryText(track) }}<template v-if="track.bridge"> · 桥</template><template v-if="track.tunnel"> · 隧</template></span>
-                <span v-if="!continues(track) && boundaryAhead(track) < 40" class="track-warning">该方向出发后立即遇到线路数据边界</span>
+                <span class="track-meta">距站 {{ Math.round(track.distance) }} m<template v-if="track.bridge"> · 桥</template><template v-if="track.tunnel"> · 隧</template></span>
               </span>
               <span class="track-check" aria-hidden="true">{{ selected === track.segmentId ? '✓' : '›' }}</span>
             </button>
@@ -241,7 +226,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 .track-title strong { display: block; min-width: 0; color: #eef4e8; font-size: 11px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
 .track-title em { flex-shrink: 0; color: #8d9b88; font-family: 'Barlow Condensed', sans-serif; font-size: 9px; font-style: normal; letter-spacing: .5px; }
 .track-meta { display: block; margin-top: 3px; color: #8c9988; font-size: 9px; line-height: 1.5; }
-.track-warning { display: block; margin-top: 4px; color: #ffc06a; font-size: 9px; line-height: 1.5; }
 .track-check { display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; border: 1px solid rgba(255, 255, 255, .12); color: #7f8b7a; font-size: 13px; }
 .departure-tracks > button.selected .track-check { border-color: var(--accent); color: #111710; background: var(--accent); font-size: 11px; font-weight: 700; }
 .departure-more { margin-top: 7px !important; border-style: dashed !important; color: #b9c6b2 !important; background: transparent !important; font-size: 10px !important; text-align: center !important; }

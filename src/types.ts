@@ -95,12 +95,6 @@ export interface StationDepartureTrack {
   upSign: 1 | -1;
   /** Bearing of the estimated up direction at the departure point. */
   upBearing: number;
-  /** Metres from the departure point to the next topology boundary in each direction. */
-  upBoundaryAhead: number;
-  downBoundaryAhead: number;
-  /** Whether at least one derived drivable exit exists at each boundary. */
-  upContinues: boolean;
-  downContinues: boolean;
   bridge: boolean;
   tunnel: boolean;
   /** Local display polyline around the departure point. */
