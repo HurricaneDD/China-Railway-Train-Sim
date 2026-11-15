@@ -25,4 +25,3 @@ export function railHeight(segment: RailSegment, offset: number, height: (point:
   const span = segment.cumulative[high] - segment.cumulative[low];
   return a + (b - a) * (span > 0 ? (target - segment.cumulative[low]) / span : 0);
 }
-
