@@ -1,4 +1,4 @@
-import { APP_CONFIG } from '../config';
+import { APP_CONFIG, type SimulationSpeed } from '../config';
 import { RailwayRepository, type RailExit, type RailBoundary } from '../data/railway';
 import { StationRepository } from '../data/stations';
 import { neighboringProvinces } from '../data/province-neighbors';
@@ -19,6 +19,8 @@ export class GameSession {
   connectionWarning = '';
   running = false;
   paused = false;
+  /** Wall-clock multiplier for physics simulation; does not change dynamics or route identity. */
+  simulationSpeed: SimulationSpeed = 1;
   elapsed = 0;
   brakeHeld = false;
   parkingBrake = true;
@@ -54,8 +56,23 @@ export class GameSession {
     await this.railway.load(province);
     const snapped = this.railway.network.nearest(point, maxDistance);
     if (!snapped) throw new Error(`附近 ${Math.round(maxDistance)} 米内没有可用国铁线路，请重新选择`);
-    province = this.railway.network.segments.get(snapped.segmentId)!.properties.province;
-    this.position = { province, segmentId: snapped.segmentId, offset: snapped.offset, direction: 1, travelled: 0 };
+    this.beginTrip(snapped.segmentId, snapped.offset, 1);
+    return snapped;
+  }
+
+  /** Start on a line chosen in the station departure map. */
+  startOnTrack(segmentId: string, offset: number, direction: 1 | -1): LonLat {
+    const segment = this.railway.network.segments.get(segmentId);
+    if (!segment) throw new Error('所选始发线路不存在，请重新选择');
+    const clamped = Math.max(0, Math.min(segment.length, offset));
+    this.beginTrip(segmentId, clamped, direction);
+    return pointAt(segment, clamped);
+  }
+
+  private beginTrip(segmentId: string, offset: number, direction: 1 | -1): void {
+    const segment = this.railway.network.segments.get(segmentId);
+    if (!segment) throw new Error('出发区段不存在');
+    this.position = { province: segment.properties.province, segmentId, offset, direction, travelled: 0 };
     this.train = initialTrainState();
     this.train.brakeCommand = this.train.brakeActual = 100;
     this.train.brakePipe = 430;
@@ -71,6 +88,7 @@ export class GameSession {
     this.slopeGeneration++;
     this.clearControls();
     this.elapsed = 0;
+    this.simulationSpeed = 1;
     this.junction = undefined;
     this.connectionWarning = '';
     this.preferredNext = undefined;
@@ -81,7 +99,6 @@ export class GameSession {
     void this.refreshSlope();
     void this.loadNearbyProvinces();
     this.onUpdate?.();
-    return snapped;
   }
 
   async restore(save: GameSave): Promise<void> {
@@ -104,6 +121,7 @@ export class GameSession {
     this.slopeGeneration++;
     this.clearControls();
     this.elapsed = save.elapsed;
+    this.simulationSpeed = 1;
     this.junction = undefined;
     this.connectionWarning = '';
     this.preferredNext = undefined;
@@ -148,6 +166,15 @@ export class GameSession {
     this.paused = value;
     this.clearControls();
     this.onUpdate?.();
+  }
+
+  setSimulationSpeed(value: number): boolean {
+    if (!(APP_CONFIG.simulation.speedOptions as readonly number[]).includes(value)) return false;
+    this.simulationSpeed = value as SimulationSpeed;
+    // Drop any stale accumulator so switching speed never injects a burst of physics steps.
+    this.accumulator = 0;
+    this.onUpdate?.();
+    return true;
   }
 
   toggleParkingBrake(): void {
@@ -257,11 +284,15 @@ export class GameSession {
       if (!this.running) return;
       const delta = Math.min(APP_CONFIG.simulation.maxFrameDelta, (time - this.previousTime) / 1000);
       this.previousTime = time;
-      this.accumulator += delta;
-      while (this.accumulator >= APP_CONFIG.simulation.fixedStep) {
+      this.accumulator += delta * this.simulationSpeed;
+      let steps = 0;
+      while (this.accumulator >= APP_CONFIG.simulation.fixedStep && steps < APP_CONFIG.simulation.maxStepsPerFrame) {
         this.tick(APP_CONFIG.simulation.fixedStep);
         this.accumulator -= APP_CONFIG.simulation.fixedStep;
+        steps++;
       }
+      // Never chase an unbounded backlog after a stall or a very slow frame.
+      if (steps >= APP_CONFIG.simulation.maxStepsPerFrame) this.accumulator = 0;
       this.uiAccumulator += delta;
       if (this.uiAccumulator >= 0.1) {
         this.onUpdate?.();
@@ -276,7 +307,9 @@ export class GameSession {
     if (this.paused || this.junction || this.loadingBorder || this.routeEnd || !this.position) return;
     this.elapsed += dt;
     this.repeatTimer += dt;
-    if (this.repeatTimer >= APP_CONFIG.train.keyRepeatMs / 1000) {
+    // Input repeat and background work stay at wall-clock cadence while physics is sped up.
+    const speed = this.simulationSpeed;
+    if (this.repeatTimer >= (APP_CONFIG.train.keyRepeatMs / 1000) * speed) {
       const direction = this.heldThrottle.has('up') ? 1 : this.heldThrottle.has('down') ? -1 : 0;
       if (direction) this.setThrottle(this.train.throttle + direction * APP_CONFIG.train.throttleStep);
       this.repeatTimer = 0;
@@ -287,15 +320,15 @@ export class GameSession {
     this.slopeTimer += dt;
     this.borderTimer += dt;
     this.autosaveTimer += dt;
-    if (this.slopeTimer >= 1.5) {
+    if (this.slopeTimer >= 1.5 * speed) {
       this.slopeTimer = 0;
       void this.refreshSlope();
     }
-    if (this.borderTimer >= 3) {
+    if (this.borderTimer >= 3 * speed) {
       this.borderTimer = 0;
       void this.loadNearbyProvinces();
     }
-    if (this.autosaveTimer >= APP_CONFIG.simulation.autosaveSeconds) {
+    if (this.autosaveTimer >= APP_CONFIG.simulation.autosaveSeconds * speed) {
       this.autosaveTimer = 0;
       this.onAutosave?.();
     }
@@ -393,14 +426,35 @@ export class GameSession {
     });
     this.clearControls();
     const current = this.railway.network.segments.get(segmentId)!;
-    const incomingBearing = bearing(pointAt(current, boundary.offset - Math.sign(direction) * 10), pointAt(current, boundary.offset));
+    const at = pointAt(current, boundary.offset);
+    const incomingBearing = bearing(pointAt(current, boundary.offset - Math.sign(direction) * 10), at);
+    const approachAvailable = direction > 0 ? boundary.offset : current.length - boundary.offset;
+    const approachMeters = Math.min(APP_CONFIG.simulation.junctionApproachMeters, Math.max(0, approachAvailable));
+    const incoming: LonLat[] = [];
+    const approachSteps = approachMeters > 0.5 ? Math.max(1, Math.ceil(approachMeters / 10)) : 0;
+    for (let index = 0; index <= approachSteps; index++) {
+      const behind = approachMeters * (1 - index / Math.max(1, approachSteps));
+      incoming.push(pointAt(current, boundary.offset - direction * behind));
+    }
+    if (!incoming.length) incoming.push(at);
+    // Nearby tracks give the prompt local yard context. The selected preview path remains the
+    // authoritative route; this background geometry is display-only and never a second connection rule.
+    const contextTracks = this.railway.network.segmentsNear(at, APP_CONFIG.simulation.junctionContextRadius,
+      APP_CONFIG.simulation.junctionContextMaxSegments, current.id).map((segment) => ({
+      segmentId: segment.id,
+      name: segment.properties.name === '未命名铁路' ? '未识别轨道' : segment.properties.name,
+      bridge: segment.properties.bridge,
+      tunnel: segment.properties.tunnel,
+      points: segment.points.map((point) => ({ lon: point.lon, lat: point.lat })),
+    }));
     const diagnostics = this.railway.network.connectionsAt(segmentId, boundary, direction).map(connection => ({
       ...connection, incoming: { segmentId, osmId: current.properties.osmId, properties: current.properties, direction },
       outgoing: this.railway.network.segments.get(connection.segmentId)?.properties,
       previewStop: options.find(option => option.segmentId === connection.key)?.stopReason,
     }));
     this.junction = { nodeId: boundary.nodeId, atSegmentEnd: direction > 0, options,
-      currentName: current.properties.name === '未命名铁路' ? '未识别轨道' : current.properties.name, incomingBearing, diagnostics };
+      currentName: current.properties.name === '未命名铁路' ? '未识别轨道' : current.properties.name, incomingBearing,
+      context: { center: at, incoming, tracks: contextTracks }, diagnostics };
     this.onUpdate?.();
   }
 

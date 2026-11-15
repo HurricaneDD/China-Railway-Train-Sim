@@ -7,14 +7,19 @@ interface StationDataset {
   pending_stations: PendingStation[];
 }
 
+/** Injectable so nested tools can resolve their own data path; main app uses fetchJson. */
+export type StationJsonFetcher = <T>(path: string) => Promise<T>;
+
 export class StationRepository {
   stations: Station[] = [];
   pending: PendingStation[] = [];
   private loaded = false;
 
+  constructor(private readonly loadJson: StationJsonFetcher = fetchJson) {}
+
   async load(): Promise<void> {
     if (this.loaded) return;
-    const data = await fetchJson<StationDataset>('stations.json');
+    const data = await this.loadJson<StationDataset>('stations.json');
     if (data.type !== 'station_dataset' || !Array.isArray(data.stations) || !Array.isArray(data.pending_stations)) {
       throw new Error('车站数据格式不正确');
     }

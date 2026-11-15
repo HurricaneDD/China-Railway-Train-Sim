@@ -9,6 +9,26 @@ function railwayData(): Plugin {
   return {
     name: 'railway-data',
     configureServer(server) {
+      // A missing trailing slash would otherwise fall through to Vite's SPA
+      // fallback and open the main simulator instead of the inspector.
+      server.middlewares.use((req, res, next) => {
+        const url = new URL(req.url ?? '/', 'http://localhost');
+        // Compatibility redirect for the misspelled path used in earlier builds.
+        if (url.pathname === '/dev/raliway-check' || url.pathname.startsWith('/dev/raliway-check/')) {
+          const suffix = url.pathname.slice('/dev/raliway-check'.length) || '/';
+          res.statusCode = 302;
+          res.setHeader('Location', `/dev/railway-check${suffix}${url.search}`);
+          res.end();
+          return;
+        }
+        if (url.pathname === '/dev/railway-check') {
+          res.statusCode = 302;
+          res.setHeader('Location', `/dev/railway-check/${url.search}`);
+          res.end();
+          return;
+        }
+        next();
+      });
       server.middlewares.use(async (req, res, next) => {
         if (!req.url?.startsWith('/data/')) return next();
         const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
@@ -34,7 +54,26 @@ function railwayData(): Plugin {
         await cp(resolve(__dirname, 'data', file), target, { recursive: true });
       }
       await cp(resolve(__dirname, 'data/README.md'), resolve(__dirname, 'dist/data/README.md'));
+      // Landing-page background slides are static media, not provincial railway data.
+      await cp(resolve(__dirname, 'media'), resolve(__dirname, 'dist/media'), { recursive: true });
       await writeFile(resolve(__dirname, 'dist/.nojekyll'), '');
+    },
+  };
+}
+
+/** The standalone inspector does not import Cesium; remove injected tags under its nested URL. */
+function railwayCheckHtml(): Plugin {
+  return {
+    name: 'railway-check-html',
+    transformIndexHtml: {
+      order: 'post',
+      handler(html, context) {
+        const path = (context.filename || context.path || '').replace(/\\/g, '/');
+        if (!path.endsWith('dev/railway-check/index.html')) return html;
+        return html
+          .replace(/\s*<link[^>]+cesium[^>]*>/gi, '')
+          .replace(/\s*<script[^>]+cesium[^>]*>\s*<\/script>/gi, '');
+      },
     },
   };
 }
@@ -42,10 +81,24 @@ function railwayData(): Plugin {
 export default defineConfig({
   base: './',
   publicDir: false,
-  plugins: [vue(), cesium(), railwayData()],
+  plugins: [vue(), cesium(), railwayCheckHtml(), railwayData()],
   resolve: { alias: { '@': resolve(__dirname, 'src') } },
+  server: {
+    host: '0.0.0.0',
+    port: 8062,
+    strictPort: true,
+    // Allow reverse proxies and external hostnames to reach the dev server.
+    // This only affects `vite dev`; production output is unaffected.
+    allowedHosts: true,
+  },
   build: {
     target: 'es2022',
     chunkSizeWarningLimit: 5000,
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        railwayCheck: resolve(__dirname, 'dev/railway-check/index.html'),
+      },
+    },
   },
 });

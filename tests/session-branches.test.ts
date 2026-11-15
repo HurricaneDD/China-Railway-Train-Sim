@@ -80,6 +80,24 @@ describe('分岔改道与跨省恢复', () => {
     expect(distance(points[0], points[1])).toBeCloseTo(24, 1);
   });
 
+  it('分岔提示保存附近配线图和接近节点，供二维地图绘制与点击选线', () => {
+    const { session, internals, a, b, c } = branchedSession();
+    vi.spyOn(session.railway.network, 'segmentsNear').mockReturnValue([a, b, c]);
+    session.train.reverser = 1;
+    session.train.velocity = 1;
+    internals.advance(100);
+    expect(session.junction).toBeDefined();
+    expect(session.junction!.options).toHaveLength(2);
+    expect(session.junction!.context.tracks.map(track => track.segmentId)).toEqual([a.id, b.id, c.id]);
+    expect(session.junction!.context.incoming.length).toBeGreaterThan(2);
+    const lastIncoming = session.junction!.context.incoming.at(-1)!;
+    expect(lastIncoming.lon).toBeCloseTo(a.points[1].lon, 8);
+    expect(lastIncoming.lat).toBeCloseTo(a.points[1].lat, 8);
+    expect(session.junction!.context.center.lon).toBeCloseTo(a.points[1].lon, 8);
+    expect(session.junction!.context.center.lat).toBeCloseTo(a.points[1].lat, 8);
+    expect(session.railway.network.segmentsNear).toHaveBeenCalled();
+  });
+
   it('旧行程慢速端点检查完成，不得锁住新行程的区段中段', async () => {
     vi.stubGlobal('requestAnimationFrame', () => 1);
     vi.stubGlobal('cancelAnimationFrame', () => {});

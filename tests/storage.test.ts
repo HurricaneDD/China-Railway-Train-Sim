@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { saveStore, validateGameSave } from '../src/core/storage';
+import { loadSettings, saveStore, validateGameSave } from '../src/core/storage';
 import { APP_CONFIG } from '../src/config';
 import { initialTrainState } from '../src/core/dynamics';
 
@@ -72,6 +72,18 @@ describe('存档事务提交', () => {
     fake.tx.onabort?.();
     await rejection;
     expect(fake.db.close).toHaveBeenCalledOnce();
+  });
+});
+
+describe('地图瓦片设置迁移', () => {
+  it('旧设置没有 mapTiles 时默认高德卫星', () => {
+    vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ sound: false }), setItem: vi.fn() });
+    expect(loadSettings()).toMatchObject({ sound: false, mapTiles: 'amap-satellite' });
+  });
+
+  it('无效或未知的瓦片值回落到默认值', () => {
+    vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ mapTiles: 'unknown-tiles' }), setItem: vi.fn() });
+    expect(loadSettings().mapTiles).toBe('amap-satellite');
   });
 });
 

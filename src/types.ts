@@ -75,6 +75,32 @@ export interface SnapResult {
   distance: number;
 }
 
+/** A nearby original rail segment offered as a starting line. */
+export interface StationDepartureLine {
+  segmentId: string;
+  name: string;
+  /** Metres from the station coordinate to the nearest point on this line. */
+  distance: number;
+  /** Nearest offset along the original segment (the departure point). */
+  offset: number;
+  segmentLength: number;
+  /** Coordinate-ascending tangent at the departure point. */
+  heading: number;
+  bridge: boolean;
+  tunnel: boolean;
+  /** Local display polyline around the departure point. */
+  points: LonLat[];
+}
+
+/** Local, display-only snapshot around a station. No yard or track numbering. */
+export interface StationDeparture {
+  station: Station;
+  center: LonLat;
+  radius: number;
+  lines: StationDepartureLine[];
+  truncated: boolean;
+}
+
 export interface RoutePoint extends LonLat {
   height: number;
   heading: number;
@@ -95,16 +121,36 @@ export interface JunctionOption {
   reason: string;
 }
 
+export interface JunctionContextTrack {
+  segmentId: string;
+  name: string;
+  bridge: boolean;
+  tunnel: boolean;
+  points: LonLat[];
+}
+
+/** Static snapshot for the two-dimensional nearby-track map in the junction prompt. */
+export interface JunctionContext {
+  center: LonLat;
+  /** Approach geometry ordered from behind the train toward the junction. */
+  incoming: LonLat[];
+  tracks: JunctionContextTrack[];
+}
+
 export interface JunctionRequest {
   nodeId: string;
   atSegmentEnd: boolean;
   options: JunctionOption[];
   currentName: string;
   incomingBearing: number;
+  context: JunctionContext;
   diagnostics: unknown;
 }
 
 export type Reverser = -1 | 0 | 1;
+
+/** cab：驾驶室；free：可旋转缩放的第三人称自由视角；fixed：跟随列车后上方的第三人称固定视角。 */
+export type CameraMode = 'cab' | 'free' | 'fixed';
 
 export interface TrainState {
   velocity: number;
