@@ -126,7 +126,6 @@ select { min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-
 }
 /* Render into the actual driving window: menus and the desk must not crop a full-screen lens. */
 .is-driving .map-canvas { top: var(--hud-menubar); right: 0; bottom: var(--hud-statusbar); left: var(--hud-sidebar); }
-.is-driving.is-cab .map-canvas { top: calc(var(--hud-menubar) + 24px); bottom: calc(var(--hud-statusbar) + 150px); }
 .driving-ui {
   position: fixed;
   inset: 0;
@@ -256,17 +255,6 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
 .status-field strong i { color: var(--muted); font-family: 'Barlow Condensed', sans-serif; font-size: 9px; font-style: normal; letter-spacing: .5px; }
 
 /* Lightweight cab frame, constrained to the display area. */
-.cab-shell { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
-.cab-roof { position: absolute; top: 0; right: 0; left: 0; height: 24px; border-bottom: 4px solid #080d0e; background: linear-gradient(#252c2c, #12191b); box-shadow: 0 10px 24px #0005; text-align: center; }
-.cab-roof span { color: #9faead; font-size: 8px; letter-spacing: 5px; line-height: 20px; }
-.cab-pillar { position: absolute; top: 24px; bottom: 150px; width: 30px; border: 4px solid #080d10; background: linear-gradient(90deg, #080e10, #384346 58%, #121a1d); box-shadow: 5px 0 16px #0006; }
-.cab-pillar.left { left: 8px; transform: skewX(-5deg); transform-origin: bottom; }
-.cab-pillar.right { right: 8px; transform: skewX(5deg); transform-origin: bottom; }
-.cab-wiper { position: absolute; right: 16%; bottom: 160px; width: 3px; height: 110px; border-left: 1px solid #74817e; background: #121b1e; box-shadow: 1px 1px 3px #0006; transform: rotate(-57deg); transform-origin: bottom; }
-.cab-dashboard { position: absolute; right: 0; bottom: 0; left: 0; height: 150px; border-top: 7px solid #10191c; background: linear-gradient(175deg, #435253 0%, #283638 15%, #162125 48%, #0a1215 100%); box-shadow: 0 -14px 24px #0007; }
-.cab-dashboard::before { content: ''; position: absolute; top: -24px; right: 0; left: 0; height: 19px; background: #253337; clip-path: polygon(0 70%, 14% 0, 86% 0, 100% 70%, 100% 100%, 0 100%); }
-.cab-dashboard > span { position: absolute; top: 15px; left: 50%; color: #899b9a; font-size: 7px; letter-spacing: 3px; white-space: nowrap; transform: translateX(-50%); }
-.cab-vents { position: absolute; top: 4px; right: 33%; left: 33%; height: 6px; background: repeating-linear-gradient(90deg, #091216 0 3px, transparent 3px 7px); }
 .cab-view .drive-menubar { background: linear-gradient(180deg, rgba(14, 20, 22, .97), rgba(10, 15, 17, .94)); }
 .cab-view .drive-sidebar { background: linear-gradient(180deg, rgba(13, 19, 21, .96), rgba(9, 14, 16, .9)); }
 .cab-view .drive-statusbar { background: linear-gradient(180deg, rgba(14, 20, 22, .93), rgba(9, 14, 16, .97)); }
@@ -406,7 +394,6 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
 }
 @media (max-width: 640px) {
   .app-shell, .driving-ui { --hud-menubar: 44px; --hud-statusbar: 50px; }
-  .is-driving.is-cab .map-canvas { bottom: calc(var(--hud-statusbar) + 110px); }
   .drive-menubar { padding: 0 4px; }
   .menubar-brand { gap: 6px; padding-right: 6px; }
   .menubar-brand .brand-mark.small { width: 26px; height: 26px; font-size: 13px; }
@@ -421,13 +408,6 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
   .status-field { gap: 2px; padding: 0 7px; }
   .status-field span { font-size: 7px; letter-spacing: .2px; }
   .status-field strong { font-size: 9.5px; }
-  .cab-roof span { font-size: 7px; letter-spacing: 3px; }
-  .cab-pillar { bottom: 110px; width: 20px; }
-  .cab-pillar.left { left: 0; }
-  .cab-pillar.right { right: 0; }
-  .cab-wiper { bottom: 118px; height: 80px; }
-  .cab-dashboard { height: 110px; }
-  .cab-dashboard > span { display: none; }
   .menu-dropdown { min-width: 200px; }
   .help-panel { padding: 22px; }
 }

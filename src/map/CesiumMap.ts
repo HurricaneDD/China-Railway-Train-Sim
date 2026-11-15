@@ -14,6 +14,7 @@ import { RailRenderer } from './RailRenderer';
 import { SceneryManager } from './SceneryManager';
 import { StationLabelRenderer } from './StationLabelRenderer';
 import { TrainRenderer } from './TrainRenderer';
+import { CabRenderer } from './CabRenderer';
 import { offsetPoint } from '../utils/geo';
 import { withTimeout } from '../utils/assets';
 
@@ -35,6 +36,7 @@ export class CesiumMap {
   private sceneryCheckTime = 0;
   private provinceRailway?: GroundPolylinePrimitive;
   private trainRenderer!: TrainRenderer;
+  private cabRenderer!: CabRenderer;
   private stationLabels!: StationLabelRenderer;
   private handler?: ScreenSpaceEventHandler;
   private session?: GameSession;
@@ -44,7 +46,7 @@ export class CesiumMap {
   private cameraMode: CameraMode = 'cab';
   private defaultFov = Math.PI / 3;
   private cabHeading?: number;
-  private animationFrame = 0;
+  private removeBeforeUpdate?: () => void;
   private previousTime = 0;
   private downPosition?: Cartesian2;
   private pickLocation?: (point: LonLat) => void;
@@ -64,6 +66,8 @@ export class CesiumMap {
       infoBox: false,
       navigationHelpButton: false,
       sceneModePicker: false,
+      // Train-local moving geometry must not be projected as ECEF for unused 2D/Columbus modes.
+      scene3DOnly: true,
       selectionIndicator: false,
       timeline: false,
       requestRenderMode: false,
@@ -81,6 +85,7 @@ export class CesiumMap {
     this.railRenderer = new RailRenderer(this.viewer, this.session!.elevation);
     this.scenery = new SceneryManager(this.viewer, this.session!.elevation);
     this.trainRenderer = new TrainRenderer(this.viewer);
+    this.cabRenderer = new CabRenderer(this.viewer);
     this.stationLabels = new StationLabelRenderer(this.viewer);
     // Apply the selected raster source before the first visible frame; AMap
     // needs no ion round-trip and starts loading immediately.
@@ -91,7 +96,8 @@ export class CesiumMap {
       this.onError?.('三维画面暂时中断，列车已暂停。请重试地图服务后继续驾驶。');
     });
     this.previousTime = performance.now();
-    this.animate();
+    // Update the eye and train-local cockpit before Cesium derives this frame's culling volumes.
+    this.removeBeforeUpdate = this.viewer.scene.preUpdate.addEventListener(this.animate);
     void this.retryServices();
   }
 
@@ -305,6 +311,10 @@ export class CesiumMap {
     this.viewer.camera.lookAtTransform(Matrix4.IDENTITY);
     // 固定视角会为取景放宽视场，切回驾驶室/自由视角时恢复默认镜头。
     if (mode !== 'fixed') this.applyFov(this.defaultFov);
+    if (mode !== 'cab') {
+      this.cabRenderer?.hide();
+      if (this.viewer.camera.frustum instanceof PerspectiveFrustum) this.viewer.camera.frustum.near = 1;
+    }
   }
 
   destroy(): void {
@@ -312,12 +322,13 @@ export class CesiumMap {
     this.serviceGeneration++;
     this.tileGeneration++;
     this.tileLayers = [];
-    cancelAnimationFrame(this.animationFrame);
+    this.removeBeforeUpdate?.();
     this.removeRenderError?.();
     if (this.viewer && !this.viewer.isDestroyed()) {
       this.stationLabels?.clear();
       this.railRenderer?.clear();
       this.scenery?.clear();
+      this.cabRenderer?.destroy();
       this.clearProvinceRailway();
     }
     this.handler?.destroy();
@@ -363,6 +374,7 @@ export class CesiumMap {
         }
       }
       const inCab = this.cameraMode === 'cab';
+      if (!inCab) this.cabRenderer.hide();
       // 只有“第三人称自由”允许玩家旋转/缩放；固定视角和驾驶室每帧重置相机。
       this.viewer.scene.screenSpaceCameraController.enableInputs = this.cameraMode === 'free';
       this.trainRenderer.update(inCab ? [] : points);
@@ -377,11 +389,11 @@ export class CesiumMap {
       this.cameraTarget = undefined;
       this.cabHeading = undefined;
       this.trainRenderer.update([]);
+      this.cabRenderer.hide();
     }
     // Driving station dots/labels are bounded by APP_CONFIG.stationLabels and
     // rebuilt only after the train has moved far enough.
     this.stationLabels?.update(now, stationCenter, this.session?.stations.stations ?? []);
-    this.animationFrame = requestAnimationFrame(this.animate);
   };
 
   private driveFromCab(lon: number, lat: number, height: number, heading: number, dt: number): void {
@@ -391,13 +403,16 @@ export class CesiumMap {
       const difference = Math.atan2(Math.sin(desired - this.cabHeading), Math.cos(desired - this.cabHeading));
       this.cabHeading += difference * (1 - Math.exp(-APP_CONFIG.camera.cabHeadingSmoothing * dt));
     }
-    const eye = cabCameraPose({ lon, lat, height }, heading, this.session?.train.slope ?? 0);
+    // Camera and interior share one smoothed body frame, including grade and the seat's offset.
+    const eye = cabCameraPose({ lon, lat, height }, this.cabHeading * 180 / Math.PI, this.session?.train.slope ?? 0);
     const canvas = this.viewer.scene.canvas;
     this.applyFov(cabCameraFov(canvas.clientWidth, canvas.clientHeight));
+    if (this.viewer.camera.frustum instanceof PerspectiveFrustum) this.viewer.camera.frustum.near = APP_CONFIG.camera.cabNear;
+    if (this.session) this.cabRenderer.update(eye.frame, this.session.train, this.session.elapsed, performance.now());
     this.viewer.camera.lookAtTransform(Matrix4.IDENTITY);
     this.viewer.camera.setView({
-      destination: Cartesian3.fromDegrees(eye.lon, eye.lat, eye.altitude),
-      orientation: { heading: this.cabHeading, pitch: eye.pitch, roll: 0 },
+      destination: eye.position,
+      orientation: { direction: eye.direction, up: eye.up },
     });
   }
 

@@ -190,12 +190,6 @@ onBeforeUnmount(() => {
     </header>
 
     <main class="drive-display" aria-label="驾驶显示区域">
-      <div v-if="cameraMode === 'cab'" class="cab-shell" aria-hidden="true">
-        <div class="cab-roof"><span>中国铁路 · 驾驶室</span></div>
-        <div class="cab-pillar left" /><div class="cab-pillar right" />
-        <div class="cab-wiper" />
-        <div class="cab-dashboard"><div class="cab-vents" /><span>CHINA RAILWAY / DRIVER'S DESK</span></div>
-      </div>
 
       <div v-if="session.loadingBorder || session.routeEnd" class="route-status" role="status">
         {{ session.loadingBorder ? '正在检查相邻省份线路，已暂停推进…' : '前方线路中断或连接未确认 · 可换向后退或返回选站' }}

@@ -1,6 +1,7 @@
 import { APP_CONFIG } from '../config';
 import type { LonLat } from '../types';
 import { offsetPoint } from '../utils/geo';
+import { Cartesian3, Cartographic, Matrix3, Matrix4, Transforms } from 'cesium';
 
 export interface FixedCameraPose {
   lon: number;
@@ -11,22 +12,33 @@ export interface FixedCameraPose {
 }
 
 /** Driver's eye follows the rail profile, never the terrain's highest visible surface. */
-export function cabCameraPose(head: LonLat & { height: number }, heading: number, grade: number): FixedCameraPose {
-  const forward = APP_CONFIG.camera.cabForwardOffset;
-  const slope = Number.isFinite(grade) ? grade : 0;
-  const eye = offsetPoint(head, heading - 90, forward);
-  return { ...eye, heading,
-    altitude: head.height + APP_CONFIG.track.heightOffset + APP_CONFIG.camera.cabEyeHeight + slope * forward,
-    pitch: Math.atan(slope) + APP_CONFIG.camera.cabPitch,
-  };
+export interface CabCameraPose extends FixedCameraPose {
+  frame: Matrix4;
+  position: Cartesian3;
+  direction: Cartesian3;
+  up: Cartesian3;
 }
 
-/** Preserve a natural forward lens without a portrait-screen vertical fisheye. */
+export function cabCameraPose(head: LonLat & { height: number }, heading: number, grade: number): CabCameraPose {
+  const forward = APP_CONFIG.camera.cabForwardOffset;
+  const slope = Number.isFinite(grade) ? grade : 0;
+  const origin = offsetPoint(head, heading - 90, forward);
+  const world = Cartesian3.fromDegrees(origin.lon, origin.lat, head.height + APP_CONFIG.track.heightOffset + slope * forward);
+  const rotation = Matrix3.multiply(Matrix3.fromRotationZ(-heading * Math.PI / 180), Matrix3.fromRotationX(Math.atan(slope)), new Matrix3());
+  const frame = Matrix4.multiply(Transforms.eastNorthUpToFixedFrame(world), Matrix4.fromRotationTranslation(rotation), new Matrix4());
+  const position = Matrix4.multiplyByPoint(frame, new Cartesian3(APP_CONFIG.camera.cabSeatOffset, 0, APP_CONFIG.camera.cabEyeHeight), new Cartesian3());
+  const pitch = APP_CONFIG.camera.cabPitch;
+  const direction = Matrix4.multiplyByPointAsVector(frame, new Cartesian3(0, Math.cos(pitch), Math.sin(pitch)), new Cartesian3());
+  const up = Matrix4.multiplyByPointAsVector(frame, new Cartesian3(0, -Math.sin(pitch), Math.cos(pitch)), new Cartesian3());
+  const eye = Cartographic.fromCartesian(position);
+  return { lon: eye.longitude * 180 / Math.PI, lat: eye.latitude * 180 / Math.PI, altitude: eye.height,
+    heading, pitch: Math.atan(slope) + pitch, frame, position, direction, up };
+}
+
+/** Reference uses 55 degrees VERTICAL; a horizontal 55-degree lens would crop the cab away. */
 export function cabCameraFov(width: number, height: number): number {
   const aspect = width / Math.max(1, height);
-  const horizontal = APP_CONFIG.camera.cabHorizontalFovDegrees * Math.PI / 180;
-  const maxVertical = APP_CONFIG.camera.cabMaxVerticalFovDegrees * Math.PI / 180;
-  const vertical = Math.min(maxVertical, 2 * Math.atan(Math.tan(horizontal / 2) / Math.max(0.1, aspect)));
+  const vertical = APP_CONFIG.camera.cabVerticalFovDegrees * Math.PI / 180;
   return horizontalFovForVertical(vertical, aspect);
 }
 
