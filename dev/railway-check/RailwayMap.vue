@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { RailSegment } from '../../src/types';
-import { BASEMAPS, type BasemapId } from './basemap';
+import type { LonLat, RailSegment, Station } from '../../src/types';
+import { BasemapTiles } from '../../src/map/canvasLayer';
+import { gcj02ToWgs84, wgs84ToGcj02 } from '../../src/utils/gcj02';
+import { BASEMAPS, type InspectorBasemap } from './basemap';
+import { metresPerWorldUnit, projectMercator, tileZoomForScale, unprojectMercator, type WorldPoint } from './mercator';
+import { STATION_MIN_TILE_ZOOM, stationLabel, stationWorldPoints, type StationWorldPoint } from './stationLabels';
 import type { BreakGroup, FilteredLink } from './analysis';
-import { metresPerWorldUnit, projectMercator, tileZoomForScale, unprojectMercator } from './mercator';
 
 const props = defineProps<{
   segments: RailSegment[];
@@ -14,20 +17,24 @@ const props = defineProps<{
   showFiltered: boolean;
   showBridgeTunnel: boolean;
   showIsolated: boolean;
-  basemap: BasemapId;
+  basemap: InspectorBasemap;
+  stations: Station[];
+  showStations: boolean;
 }>();
 const emit = defineEmits<{ select: [id: string | null]; cursor: [lon: number | null, lat: number | null] }>();
 
 const host = ref<HTMLDivElement>();
 const canvas = ref<HTMLCanvasElement>();
+const hoverCanvas = ref<HTMLCanvasElement>();
 const view = ref({ cx: 0, cy: 0, scale: 1 });
 const size = ref({ width: 0, height: 0 });
 const hoverId = ref<string | null>(null);
 const tooltip = ref({ x: 0, y: 0 });
 const cursor = ref<{ lon: number; lat: number } | null>(null);
-const basemapNotice = ref('');
+const tileState = ref<'loading' | 'ready' | 'error'>('loading');
 
 let ctx: CanvasRenderingContext2D | null = null;
+let hoverCtx: CanvasRenderingContext2D | null = null;
 let resizeObserver: ResizeObserver | undefined;
 let renderFrame = 0;
 let fitScale = 1;
@@ -44,26 +51,36 @@ let dragDistance = 0;
 let pointerDownId: number | null = null;
 let disposed = false;
 
-interface TileEntry {
-  image: HTMLImageElement;
-  state: 'loading' | 'ready' | 'error';
-}
-const tileCache = new Map<string, TileEntry>();
-let tileFailureCount = 0;
-
+const tiles = new BasemapTiles();
+const provider = computed(() => BASEMAPS[props.basemap]);
 const visibleBreaks = computed(() => props.breaks.filter(group => props.showIsolated || group.kind !== 'isolated' || group.id === props.selectedId));
 const hovered = computed(() => visibleBreaks.value.find(group => group.id === hoverId.value));
+const basemapNotice = computed(() => !props.segments.length ? '' : tileState.value === 'error'
+  ? '高德底图加载失败；线路与断点仍可显示'
+  : tileState.value === 'loading' ? '高德底图加载中…' : '');
 
-function project(lon: number, lat: number): { x: number; y: number } {
-  return projectMercator(lon, lat);
+/**
+ * AMap tiles are GCJ-02. Only the display copy is shifted; every analysis,
+ * station record, save and detail panel remains WGS84.
+ */
+function displayPoint(point: LonLat): LonLat {
+  return provider.value.coordinateSystem === 'gcj02' ? wgs84ToGcj02(point) : point;
 }
 
-function screenOf(lon: number, lat: number): { x: number; y: number } {
-  const point = project(lon, lat);
+function displayWorld(point: LonLat): WorldPoint {
+  const display = displayPoint(point);
+  return projectMercator(display.lon, display.lat);
+}
+
+function screenOfWorld(world: WorldPoint): { x: number; y: number } {
   return {
-    x: size.value.width / 2 + (point.x - view.value.cx) * view.value.scale,
-    y: size.value.height / 2 + (point.y - view.value.cy) * view.value.scale,
+    x: size.value.width / 2 + (world.x - view.value.cx) * view.value.scale,
+    y: size.value.height / 2 + (world.y - view.value.cy) * view.value.scale,
   };
+}
+
+function screenOf(point: LonLat): { x: number; y: number } {
+  return screenOfWorld(displayWorld(point));
 }
 
 function worldAt(x: number, y: number): { x: number; y: number } {
@@ -73,14 +90,29 @@ function worldAt(x: number, y: number): { x: number; y: number } {
   };
 }
 
-function lonLatAt(x: number, y: number): { lon: number; lat: number } {
+/** Display-frame coordinate (GCJ-02 when using AMap). */
+function displayLonLatAt(x: number, y: number): LonLat {
   const point = worldAt(x, y);
   return unprojectMercator(point.x, point.y);
 }
 
+/** WGS84 coordinate under the pointer, shown to the user and emitted as data. */
+function wgs84At(x: number, y: number): LonLat {
+  const display = displayLonLatAt(x, y);
+  return provider.value.coordinateSystem === 'gcj02' ? gcj02ToWgs84(display) : display;
+}
+
+const positionedBreaks = computed(() => visibleBreaks.value.map(group => ({
+  group,
+  world: displayWorld({ lon: group.lon, lat: group.lat }),
+})));
+
+const positionedStations = computed<StationWorldPoint[]>(() => stationWorldPoints(props.stations, provider.value.coordinateSystem)
+  .sort((a, b) => a.world.y - b.world.y || a.world.x - b.world.x));
+
 function addSegment(path: Path2D, segment: RailSegment): void {
   segment.points.forEach((point, index) => {
-    const projected = project(point.lon, point.lat);
+    const projected = displayWorld(point);
     if (index === 0) path.moveTo(projected.x, projected.y);
     else path.lineTo(projected.x, projected.y);
   });
@@ -99,7 +131,7 @@ function rebuildPaths(): void {
   let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity;
   for (const segment of props.segments) {
     for (const point of segment.points) {
-      const projected = project(point.lon, point.lat);
+      const projected = displayWorld(point);
       west = Math.min(west, projected.x);
       east = Math.max(east, projected.x);
       south = Math.min(south, projected.y);
@@ -136,7 +168,7 @@ function fit(): void {
 }
 
 function focus(lon: number, lat: number, zoom = 14): void {
-  const point = project(lon, lat);
+  const point = displayWorld({ lon, lat });
   view.value = {
     cx: point.x,
     cy: point.y,
@@ -172,6 +204,16 @@ function resize(): void {
   target.style.height = `${size.value.height}px`;
   ctx = target.getContext('2d');
   ctx?.setTransform(ratio, 0, 0, ratio, 0, 0);
+  const overlay = hoverCanvas.value;
+  if (overlay) {
+    overlay.width = target.width;
+    overlay.height = target.height;
+    overlay.style.width = target.style.width;
+    overlay.style.height = target.style.height;
+    hoverCtx = overlay.getContext('2d');
+    hoverCtx?.setTransform(ratio, 0, 0, ratio, 0, 0);
+    drawHoverOverlay();
+  }
   requestRender();
 }
 
@@ -184,82 +226,23 @@ function requestRender(): void {
 }
 
 function drawBasemap(): void {
-  if (!ctx || props.basemap === 'none') return;
-  const provider = BASEMAPS[props.basemap];
+  if (!ctx) return;
+  const status = tiles.draw(ctx, view.value, size.value.width, size.value.height, provider.value, requestRender);
+  if (tileState.value !== status) tileState.value = status;
+  if (status !== 'ready') return;
   const { width, height } = size.value;
-  const zoom = tileZoomForScale(view.value.scale, provider.minZoom, provider.maxZoom);
-  const tilesPerSide = 2 ** zoom;
-  const tileWorld = 1 / tilesPerSide;
-  const tileScreen = tileWorld * view.value.scale;
-  const left = view.value.cx - (width / 2) / view.value.scale;
-  const right = view.value.cx + (width / 2) / view.value.scale;
-  const top = view.value.cy - (height / 2) / view.value.scale;
-  const bottom = view.value.cy + (height / 2) / view.value.scale;
-  const firstX = Math.max(0, Math.floor(left / tileWorld));
-  const lastX = Math.min(tilesPerSide - 1, Math.ceil(right / tileWorld) - 1);
-  const firstY = Math.max(0, Math.floor(top / tileWorld));
-  const lastY = Math.min(tilesPerSide - 1, Math.ceil(bottom / tileWorld) - 1);
-  let ready = 0;
-  let failed = 0;
+  ctx.fillStyle = props.basemap === 'amap-satellite' ? 'rgba(1, 5, 3, .30)' : 'rgba(2, 7, 4, .44)';
+  ctx.fillRect(0, 0, width, height);
 
-  for (let y = firstY; y <= lastY; y++) {
-    for (let x = firstX; x <= lastX; x++) {
-      const key = `${provider.id}/${zoom}/${x}/${y}`;
-      let entry = tileCache.get(key);
-      if (!entry) {
-        const image = new Image();
-        const created: TileEntry = { image, state: 'loading' };
-        const providerId = provider.id;
-        entry = created;
-        tileCache.set(key, created);
-        image.onload = () => {
-          created.state = 'ready';
-          if (props.basemap === providerId) {
-            tileFailureCount = 0;
-            basemapNotice.value = '';
-          }
-          requestRender();
-        };
-        image.onerror = () => {
-          created.state = 'error';
-          if (props.basemap === providerId) {
-            tileFailureCount++;
-            if (tileFailureCount >= 3) basemapNotice.value = '底图瓦片加载失败；线路与断点仍按 WGS84 显示';
-          }
-          requestRender();
-        };
-        image.src = provider.tileUrl(zoom, x, y);
-      }
-      if (entry.state === 'ready') ready++;
-      else if (entry.state === 'error') failed++;
-      if (entry.state !== 'ready') continue;
-      const sx = width / 2 + (x * tileWorld - view.value.cx) * view.value.scale;
-      const sy = height / 2 + (y * tileWorld - view.value.cy) * view.value.scale;
-      ctx.drawImage(entry.image, sx, sy, tileScreen + 0.6, tileScreen + 0.6);
-    }
-  }
-  if (ready === 0 && failed > 0) basemapNotice.value = '底图瓦片加载失败；线路与断点仍按 WGS84 显示';
-  if (tileCache.size > 480) {
-    for (const [key, entry] of tileCache) {
-      if (entry.state !== 'loading') tileCache.delete(key);
-      if (tileCache.size <= 360) break;
-    }
-  }
-  if (ready > 0) {
-    // Keep the street layer subdued; satellite also gets a light scrim so bright
-    // terrain does not swallow the rail overlay.
-    ctx.fillStyle = props.basemap === 'satellite' ? 'rgba(5, 11, 8, .28)' : 'rgba(7, 12, 9, .42)';
-    ctx.fillRect(0, 0, width, height);
-    ctx.font = '9px system-ui, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'alphabetic';
-    const text = provider.attribution;
-    const textWidth = ctx.measureText(text).width;
-    ctx.fillStyle = 'rgba(10, 15, 11, .72)';
-    ctx.fillRect(width - textWidth - 14, height - 64, textWidth + 8, 14);
-    ctx.fillStyle = 'rgba(229, 238, 224, .72)';
-    ctx.fillText(text, width - textWidth - 10, height - 53);
-  }
+  ctx.font = '9px system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  const text = provider.value.attribution;
+  const textWidth = ctx.measureText(text).width;
+  ctx.fillStyle = 'rgba(10, 15, 11, .74)';
+  ctx.fillRect(width - textWidth - 14, height - 64, textWidth + 8, 14);
+  ctx.fillStyle = 'rgba(235, 242, 231, .78)';
+  ctx.fillText(text, width - textWidth - 10, height - 53);
 }
 
 function linePath(path: Path2D, color: string, width: number, dash: number[] = []): void {
@@ -287,42 +270,43 @@ function niceStep(raw: number): number {
 function drawGrid(): void {
   if (!ctx) return;
   const { width, height } = size.value;
-  const topLeft = lonLatAt(0, 0);
-  const bottomRight = lonLatAt(width, height);
+  const topLeft = displayLonLatAt(0, 0);
+  const bottomRight = displayLonLatAt(width, height);
   const west = Math.min(topLeft.lon, bottomRight.lon);
   const east = Math.max(topLeft.lon, bottomRight.lon);
   const north = Math.max(topLeft.lat, bottomRight.lat);
   const south = Math.min(topLeft.lat, bottomRight.lat);
   const span = Math.max(east - west, north - south);
   const step = niceStep(span / 8);
-  const hasBasemap = props.basemap !== 'none';
+  const displaySuffix = provider.value.coordinateSystem === 'gcj02' ? ' GCJ' : '';
   ctx.save();
   ctx.font = '10px system-ui, sans-serif';
-  ctx.fillStyle = hasBasemap ? 'rgba(240, 247, 234, .78)' : 'rgba(221, 235, 212, .4)';
-  ctx.strokeStyle = hasBasemap ? 'rgba(216, 255, 98, .14)' : 'rgba(216, 255, 98, .07)';
+  ctx.fillStyle = 'rgba(255, 255, 255, .9)';
+  ctx.strokeStyle = 'rgba(216, 255, 98, .2)';
   ctx.lineWidth = 1;
   const startLon = Math.ceil(west / step) * step;
   const startLat = Math.ceil(south / step) * step;
   for (let lon = startLon; lon <= east + step * 0.001; lon += step) {
-    const { x } = screenOf(lon, north);
+    const { x } = screenOfWorld(projectMercator(lon, 0));
     ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, height);
     ctx.stroke();
     const label = Math.abs(step) < 0.01 ? lon.toFixed(4) : Math.abs(step) < 0.1 ? lon.toFixed(3) : lon.toFixed(2);
-    ctx.fillText(`${label}°E`, x + 4, height - 10);
+    ctx.fillText(`${label}°E${displaySuffix}`, x + 4, height - 10);
   }
   for (let lat = startLat; lat <= north + step * 0.001; lat += step) {
-    const { y } = screenOf(west, lat);
+    const { y } = screenOfWorld(projectMercator(0, lat));
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(width, y);
     ctx.stroke();
     const label = Math.abs(step) < 0.01 ? lat.toFixed(4) : Math.abs(step) < 0.1 ? lat.toFixed(3) : lat.toFixed(2);
-    ctx.fillText(`${label}°N`, 8, y - 4);
+    ctx.fillText(`${label}°N${displaySuffix}`, 8, y - 4);
   }
+
   // Scale bar in metres at the map centre; Web Mercator scale varies with latitude.
-  const centre = lonLatAt(width / 2, height / 2);
+  const centre = wgs84At(width / 2, height / 2);
   const metresPerPixel = metresPerWorldUnit(centre.lat) / view.value.scale;
   const choices = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000];
   const target = metresPerPixel * 120;
@@ -349,41 +333,59 @@ function drawFiltered(): void {
   const selected = props.breaks.find(group => group.id === props.selectedId);
   const links = props.showFiltered ? props.filteredLinks : [];
   const drawLink = (from: { lon: number; lat: number }, to: { lon: number; lat: number }, color: string, width: number) => {
-    const a = screenOf(from.lon, from.lat);
-    const b = screenOf(to.lon, to.lat);
+    const a = screenOf(from);
+    const b = screenOf(to);
     ctx!.save();
+    // A dark underlay is much cheaper than per-link canvas shadows and keeps
+    // dashed links readable over both street and satellite tiles.
+    ctx!.setLineDash([7, 4]);
+    ctx!.strokeStyle = 'rgba(0, 0, 0, .8)';
+    ctx!.lineWidth = width + 2;
+    ctx!.beginPath();
+    ctx!.moveTo(a.x, a.y);
+    ctx!.lineTo(b.x, b.y);
+    ctx!.stroke();
     ctx!.strokeStyle = color;
     ctx!.lineWidth = width;
-    ctx!.setLineDash([6, 4]);
     ctx!.beginPath();
     ctx!.moveTo(a.x, a.y);
     ctx!.lineTo(b.x, b.y);
     ctx!.stroke();
     ctx!.setLineDash([]);
+    ctx!.fillStyle = '#020604';
+    ctx!.beginPath();
+    ctx!.arc(b.x, b.y, width + 2.1, 0, Math.PI * 2);
+    ctx!.fill();
     ctx!.fillStyle = color;
     ctx!.beginPath();
-    ctx!.arc(b.x, b.y, width + 0.6, 0, Math.PI * 2);
+    ctx!.arc(b.x, b.y, width + 1.1, 0, Math.PI * 2);
     ctx!.fill();
     ctx!.restore();
   };
   for (const link of links) {
-    const color = link.reason.includes('属性冲突') ? '#ff4fd8'
-      : link.reason.includes('间隙') ? '#ffad4d'
-        : link.reason.includes('内部顶点') ? '#ff5a4e'
-          : '#ffd166';
-    drawLink(link.from, link.to, color, 1.2);
+    const color = link.reason.includes('属性冲突') ? '#ff2bd6'
+      : link.reason.includes('间隙') ? '#ffa000'
+        : link.reason.includes('内部顶点') ? '#ff2020'
+          : '#ffe000';
+    drawLink(link.from, link.to, color, 1.6);
   }
   if (selected) {
     for (const candidate of selected.candidates) {
-      drawLink({ lon: selected.lon, lat: selected.lat }, candidate.to, '#ff5a4e', 1.8);
+      drawLink({ lon: selected.lon, lat: selected.lat }, candidate.to, '#ff2020', 2.3);
     }
     if (selected.nearest) {
       ctx.save();
-      ctx.strokeStyle = 'rgba(111, 214, 232, .8)';
-      ctx.lineWidth = 1.1;
-      ctx.setLineDash([3, 4]);
-      const a = screenOf(selected.lon, selected.lat);
-      const b = screenOf(selected.nearest.lon, selected.nearest.lat);
+      const a = screenOf({ lon: selected.lon, lat: selected.lat });
+      const b = screenOf({ lon: selected.nearest.lon, lat: selected.nearest.lat });
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = 'rgba(0, 0, 0, .8)';
+      ctx.lineWidth = 3.7;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.strokeStyle = '#00e5ff';
+      ctx.lineWidth = 1.7;
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
@@ -393,53 +395,199 @@ function drawFiltered(): void {
   }
 }
 
-function breakColor(group: BreakGroup): string {
-  if (group.id === props.selectedId) return '#d8ff62';
-  if (group.kind === 'filtered') return '#ff5a4e';
-  if (group.kind === 'nearby') return '#ffb347';
-  return '#899287';
+function drawStations(): void {
+  if (!ctx || !props.showStations || !props.stations.length) return;
+  const zoom = tileZoomForScale(view.value.scale, provider.value.minZoom, provider.value.maxZoom);
+  if (zoom < STATION_MIN_TILE_ZOOM) return;
+  const { width, height } = size.value;
+  const viewValue = view.value;
+  const scale = viewValue.scale;
+  const offsetX = width / 2 - viewValue.cx * scale;
+  const offsetY = height / 2 - viewValue.cy * scale;
+  const boxes: Array<{ x: number; y: number; w: number; h: number }> = [];
+  const ordered = positionedStations.value;
+  ctx.save();
+  ctx.font = '600 10px "Noto Sans SC", system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (const item of ordered) {
+    const x = item.world.x * scale + offsetX;
+    const y = item.world.y * scale + offsetY;
+    if (x < -20 || y < -20 || x > width + 20 || y > height + 20) continue;
+
+    // Station marker is deliberately distinct from the circular break markers.
+    ctx.beginPath();
+    ctx.arc(x, y, 3.6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#050a06';
+    ctx.stroke();
+
+    const label = stationLabel(item.station.name);
+    if (!label) continue;
+    const textWidth = ctx.measureText(label).width;
+    const labelWidth = textWidth + 12;
+    const labelHeight = 18;
+    const candidates = [
+      { x: x + 7, y: y - labelHeight / 2 },
+      { x: x - labelWidth - 7, y: y - labelHeight / 2 },
+      { x: x - labelWidth / 2, y: y - labelHeight - 7 },
+      { x: x - labelWidth / 2, y: y + 7 },
+    ];
+    let chosen: { x: number; y: number } | undefined;
+    for (const candidate of candidates) {
+      if (candidate.x < 4 || candidate.y < 4 || candidate.x + labelWidth > width - 4 || candidate.y + labelHeight > height - 4) continue;
+      const overlaps = boxes.some(box => candidate.x < box.x + box.w && candidate.x + labelWidth > box.x &&
+        candidate.y < box.y + box.h && candidate.y + labelHeight > box.y);
+      if (!overlaps) { chosen = candidate; break; }
+    }
+    if (!chosen) continue;
+    ctx.fillStyle = 'rgba(2, 8, 4, .94)';
+    ctx.fillRect(chosen.x, chosen.y, labelWidth, labelHeight);
+    ctx.strokeStyle = '#d8ff62';
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(chosen.x + 0.6, chosen.y + 0.6, labelWidth - 1.2, labelHeight - 1.2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(label, chosen.x + 6, chosen.y + labelHeight / 2 + 0.5);
+    boxes.push({ x: chosen.x, y: chosen.y, w: labelWidth, h: labelHeight });
+  }
+  ctx.restore();
+}
+
+const breakBaseRadius: Record<BreakGroup['kind'], number> = {
+  filtered: 5.6,
+  nearby: 5,
+  isolated: 3.8,
+};
+
+function breakFill(kind: BreakGroup['kind']): string {
+  if (kind === 'filtered') return '#ff1e1e';
+  if (kind === 'nearby') return '#ff9f00';
+  return '#78837d';
+}
+
+interface MarkerSprite {
+  canvas: HTMLCanvasElement;
+  size: number;
+}
+
+/**
+ * Markers are pre-rendered once per kind/state. Drawing 1,700+ rings and text
+ * labels with canvas shadows on every pointer move was the main redraw cost.
+ */
+const markerSprites = new Map<string, MarkerSprite>();
+
+function markerSprite(kind: BreakGroup['kind'], selected: boolean, symbol: string, ratio: number): MarkerSprite {
+  const key = `${kind}:${selected ? 'selected' : 'base'}:${symbol}:${ratio}`;
+  const cached = markerSprites.get(key);
+  if (cached) return cached;
+  const baseRadius = breakBaseRadius[kind];
+  const radius = selected ? baseRadius + 3 : baseRadius;
+  const outer = radius + 2.4;
+  const size = Math.ceil(outer * 2 + 2);
+  const sprite = document.createElement('canvas');
+  sprite.width = Math.ceil(size * ratio);
+  sprite.height = Math.ceil(size * ratio);
+  const spriteContext = sprite.getContext('2d');
+  if (spriteContext) {
+    spriteContext.scale(ratio, ratio);
+    const centre = size / 2;
+    spriteContext.beginPath();
+    spriteContext.arc(centre, centre, outer, 0, Math.PI * 2);
+    spriteContext.fillStyle = '#030604';
+    spriteContext.fill();
+    spriteContext.beginPath();
+    spriteContext.arc(centre, centre, radius + 1.2, 0, Math.PI * 2);
+    spriteContext.fillStyle = '#ffffff';
+    spriteContext.fill();
+    spriteContext.beginPath();
+    spriteContext.arc(centre, centre, radius, 0, Math.PI * 2);
+    spriteContext.fillStyle = selected ? '#f2ff00' : breakFill(kind);
+    spriteContext.fill();
+    if (symbol) {
+      spriteContext.fillStyle = selected || kind !== 'isolated' ? '#080b08' : '#ffffff';
+      spriteContext.font = '800 8.5px system-ui, sans-serif';
+      spriteContext.textAlign = 'center';
+      spriteContext.textBaseline = 'middle';
+      spriteContext.fillText(symbol, centre, centre + 0.5);
+    }
+  }
+  const entry = { canvas: sprite, size };
+  markerSprites.set(key, entry);
+  return entry;
 }
 
 function drawBreaks(): void {
   if (!ctx) return;
-  const groups = visibleBreaks.value;
-  // Draw low-priority isolated points first, then the actionable breaks on top.
-  for (const group of groups) {
-    const point = screenOf(group.lon, group.lat);
-    if (point.x < -20 || point.y < -20 || point.x > size.value.width + 20 || point.y > size.value.height + 20) continue;
-    const selected = group.id === props.selectedId;
-    const hoveredNow = group.id === hoverId.value;
-    const radius = group.kind === 'filtered' ? 5 : group.kind === 'nearby' ? 4.5 : 3;
-    ctx.beginPath();
-    ctx.fillStyle = breakColor(group);
-    ctx.globalAlpha = group.kind === 'isolated' && !selected ? 0.58 : 1;
-    ctx.arc(point.x, point.y, selected ? radius + 3 : hoveredNow ? radius + 2 : radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.lineWidth = 1.4;
-    ctx.strokeStyle = '#0d110d';
-    ctx.stroke();
-    if (selected || hoveredNow) {
-      ctx.beginPath();
-      ctx.strokeStyle = selected ? '#d8ff62' : 'rgba(255,255,255,.7)';
-      ctx.lineWidth = 1.5;
-      ctx.arc(point.x, point.y, (selected ? radius + 8 : radius + 5), 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    if (group.kind !== 'isolated' || selected) {
-      ctx.fillStyle = '#0d110d';
-      ctx.font = '700 8px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(group.candidates.length ? '!' : '?', point.x, point.y + 0.5);
+  const ratio = Math.min(2, window.devicePixelRatio || 1);
+  const viewValue = view.value;
+  const { width, height } = size.value;
+  const scale = viewValue.scale;
+  const offsetX = width / 2 - viewValue.cx * scale;
+  const offsetY = height / 2 - viewValue.cy * scale;
+  const selectedId = props.selectedId;
+  const baseSprites = new Map<string, MarkerSprite>();
+  const selectedSprites = new Map<string, MarkerSprite>();
+  for (const kind of ['filtered', 'nearby', 'isolated'] as const) {
+    for (const symbol of ['!', '?', '']) {
+      baseSprites.set(`${kind}:${symbol}`, markerSprite(kind, false, symbol, ratio));
+      selectedSprites.set(`${kind}:${symbol}`, markerSprite(kind, true, symbol, ratio));
     }
   }
+  for (const { group, world } of positionedBreaks.value) {
+    const x = world.x * scale + offsetX;
+    const y = world.y * scale + offsetY;
+    if (x < -20 || y < -20 || x > width + 20 || y > height + 20) continue;
+    const selected = group.id === selectedId;
+    const symbol = group.kind === 'isolated' && !selected ? '' : group.candidates.length ? '!' : '?';
+    const sprite = (selected ? selectedSprites : baseSprites).get(`${group.kind}:${symbol}`);
+    if (!sprite) continue;
+    ctx.drawImage(sprite.canvas, x - sprite.size / 2, y - sprite.size / 2, sprite.size, sprite.size);
+    if (selected) {
+      const radius = breakBaseRadius[group.kind] + 3 + 8.5;
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(0, 0, 0, .9)';
+      ctx.lineWidth = 4;
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.strokeStyle = '#f2ff00';
+      ctx.lineWidth = 2.2;
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+}
+
+/** Hover feedback lives on a transparent overlay; pointer movement never redraws the main map. */
+function drawHoverOverlay(): void {
+  if (!hoverCtx) return;
+  hoverCtx.clearRect(0, 0, size.value.width, size.value.height);
+  const id = hoverId.value;
+  if (!id) return;
+  const item = positionedBreaks.value.find(entry => entry.group.id === id);
+  if (!item) return;
+  const point = screenOfWorld(item.world);
+  const selected = item.group.id === props.selectedId;
+  const radius = breakBaseRadius[item.group.kind] + (selected ? 3 : 0) + 5.5;
+  hoverCtx.beginPath();
+  hoverCtx.strokeStyle = 'rgba(0, 0, 0, .9)';
+  hoverCtx.lineWidth = 4;
+  hoverCtx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+  hoverCtx.stroke();
+  hoverCtx.beginPath();
+  hoverCtx.strokeStyle = selected ? '#f2ff00' : '#ffffff';
+  hoverCtx.lineWidth = 2;
+  hoverCtx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+  hoverCtx.stroke();
 }
 
 function draw(): void {
   if (!ctx) return;
   const { width, height } = size.value;
-  ctx.setTransform(Math.min(2, window.devicePixelRatio || 1), 0, 0, Math.min(2, window.devicePixelRatio || 1), 0, 0);
+  const ratio = Math.min(2, window.devicePixelRatio || 1);
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, width, height);
   const gradient = ctx.createLinearGradient(0, 0, width, height);
   gradient.addColorStop(0, '#111712');
@@ -454,26 +602,35 @@ function draw(): void {
     ctx.font = '13px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('选择省份后加载线路与断点', width / 2, height / 2);
+    drawHoverOverlay();
     return;
   }
-  if (props.contextSegments.length) linePath(contextPath, 'rgba(122, 139, 117, .4)', 1);
+  if (props.contextSegments.length) linePath(contextPath, 'rgba(196, 210, 186, .5)', 1.15);
+  // Dark casing keeps the bright core readable on both light streets and dark imagery.
+  linePath(allPath, 'rgba(0, 0, 0, .86)', 4.2);
   if (props.showBridgeTunnel) {
-    linePath(groundPath, '#9aa690', 1.35);
-    linePath(bridgePath, '#58d6e8', 2.1);
-    linePath(tunnelPath, '#b08cff', 2.1);
+    linePath(groundPath, '#d8ff3f', 1.9);
+    linePath(bridgePath, '#00e5ff', 2.6);
+    linePath(tunnelPath, '#d37bff', 2.6);
   } else {
-    linePath(allPath, '#9aa690', 1.35);
+    linePath(allPath, '#d8ff3f', 1.9);
   }
   drawFiltered();
+  drawStations();
   drawBreaks();
+  drawHoverOverlay();
 }
 
 function findBreakAt(x: number, y: number): BreakGroup | undefined {
   let best: BreakGroup | undefined;
   let bestDistance = 13;
-  for (const group of visibleBreaks.value) {
-    const point = screenOf(group.lon, group.lat);
-    const distance = Math.hypot(point.x - x, point.y - y);
+  const viewValue = view.value;
+  const { width, height } = size.value;
+  const scale = viewValue.scale;
+  const offsetX = width / 2 - viewValue.cx * scale;
+  const offsetY = height / 2 - viewValue.cy * scale;
+  for (const { group, world } of positionedBreaks.value) {
+    const distance = Math.hypot(world.x * scale + offsetX - x, world.y * scale + offsetY - y);
     if (distance <= bestDistance) {
       best = group;
       bestDistance = distance;
@@ -500,7 +657,7 @@ function onPointerDown(event: PointerEvent): void {
 
 function onPointerMove(event: PointerEvent): void {
   const point = localPoint(event);
-  const geo = lonLatAt(point.x, point.y);
+  const geo = wgs84At(point.x, point.y);
   cursor.value = geo;
   emit('cursor', geo.lon, geo.lat);
   if (dragging) {
@@ -511,14 +668,18 @@ function onPointerMove(event: PointerEvent): void {
       cy: dragCentre.y - (point.y - dragStart.y) / view.value.scale,
     };
     hoverId.value = null;
+    drawHoverOverlay();
     requestRender();
     return;
   }
   const hit = findBreakAt(point.x, point.y);
-  hoverId.value = hit?.id ?? null;
+  const nextHover = hit?.id ?? null;
+  if (nextHover !== hoverId.value) {
+    hoverId.value = nextHover;
+    drawHoverOverlay();
+  }
   tooltip.value = { x: point.x, y: point.y };
   if (canvas.value) canvas.value.style.cursor = hit ? 'pointer' : 'grab';
-  requestRender();
 }
 
 function onPointerUp(event: PointerEvent): void {
@@ -536,13 +697,15 @@ function onPointerUp(event: PointerEvent): void {
 function onPointerCancel(): void {
   dragging = false;
   pointerDownId = null;
+  hoverId.value = null;
+  drawHoverOverlay();
 }
 
 function onPointerLeave(): void {
   cursor.value = null;
   hoverId.value = null;
   emit('cursor', null, null);
-  requestRender();
+  drawHoverOverlay();
 }
 
 function onWheel(event: WheelEvent): void {
@@ -554,10 +717,9 @@ watch(() => [props.segments, props.contextSegments], () => {
   rebuildPaths();
   fit();
 }, { flush: 'post' });
-watch(() => [props.breaks, props.filteredLinks, props.selectedId, props.showFiltered, props.showBridgeTunnel, props.showIsolated], requestRender);
+watch(() => [props.breaks, props.filteredLinks, props.selectedId, props.showFiltered, props.showBridgeTunnel, props.showIsolated, props.stations, props.showStations], requestRender);
 watch(() => props.basemap, () => {
-  basemapNotice.value = '';
-  tileFailureCount = 0;
+  tileState.value = 'loading';
   requestRender();
 });
 watch(() => props.selectedId, () => { hoverId.value = null; requestRender(); });
@@ -583,7 +745,8 @@ defineExpose({ fit, focus, zoomIn, zoomOut });
 
 <template>
   <div ref="host" class="railway-map">
-    <canvas ref="canvas" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerCancel" @pointerleave="onPointerLeave" @wheel.prevent="onWheel" />
+    <canvas ref="canvas" aria-label="高德底图线路检查地图" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerCancel" @pointerleave="onPointerLeave" @wheel.prevent="onWheel" />
+    <canvas ref="hoverCanvas" class="hover-canvas" aria-hidden="true" />
     <div v-if="hovered" class="map-tooltip" :style="{ left: `${tooltip.x + 14}px`, top: `${tooltip.y + 14}px` }">
       <strong>{{ hovered.title }}</strong>
       <span>{{ hovered.kind === 'filtered' ? '存在被过滤连接' : hovered.kind === 'nearby' ? '邻近线路未接入' : '孤立端点' }} · {{ hovered.approaches.length }} 条来路</span>
@@ -594,7 +757,7 @@ defineExpose({ fit, focus, zoomIn, zoomOut });
       <button title="适合省域" @click="fit">⤢</button>
     </div>
     <div v-if="basemapNotice" class="map-basemap-status">{{ basemapNotice }}</div>
-    <div class="map-cursor">{{ cursor ? `${cursor.lon.toFixed(5)}, ${cursor.lat.toFixed(5)}` : '拖拽平移 · 滚轮缩放 · 点击断点查看详情' }}</div>
+    <div class="map-cursor">{{ cursor ? `WGS84 ${cursor.lon.toFixed(5)}, ${cursor.lat.toFixed(5)}` : '拖拽平移 · 滚轮缩放 · 点击断点查看详情' }}</div>
   </div>
 </template>
 
@@ -602,12 +765,13 @@ defineExpose({ fit, focus, zoomIn, zoomOut });
 .railway-map { position: relative; width: 100%; height: 100%; overflow: hidden; background: #0d130f; }
 canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
 canvas:active { cursor: grabbing; }
+.hover-canvas { position: absolute; inset: 0; z-index: 1; pointer-events: none; cursor: inherit; }
 .map-tooltip { position: absolute; z-index: 3; max-width: min(320px, 70vw); padding: 8px 10px; border: 1px solid rgba(216, 255, 98, .45); background: rgba(12, 18, 13, .94); box-shadow: 0 8px 24px #0008; pointer-events: none; }
 .map-tooltip strong { display: block; color: #eff5e7; font-size: 11px; }
 .map-tooltip span { display: block; margin-top: 3px; color: #9aa695; font-size: 9px; }
-.map-controls { position: absolute; top: 14px; right: 14px; display: flex; flex-direction: column; gap: 4px; }
+.map-controls { position: absolute; z-index: 3; top: 14px; right: 14px; display: flex; flex-direction: column; gap: 4px; }
 .map-controls button { width: 32px; height: 32px; border: 1px solid rgba(255,255,255,.18); background: rgba(14, 20, 15, .9); color: #d8ff62; font-size: 15px; }
 .map-controls button:hover { border-color: #d8ff62; }
-.map-basemap-status { position: absolute; left: 50%; bottom: 14px; max-width: 60%; padding: 5px 8px; border: 1px solid rgba(255, 179, 71, .35); background: rgba(24, 18, 10, .9); color: #ffcc8a; font-size: 9px; transform: translateX(-50%); pointer-events: none; }
-.map-cursor { position: absolute; left: 14px; bottom: 14px; padding: 5px 8px; border: 1px solid rgba(255,255,255,.12); background: rgba(12, 18, 13, .82); color: #8e9b88; font-family: ui-monospace, monospace; font-size: 9px; pointer-events: none; }
+.map-basemap-status { position: absolute; z-index: 3; left: 50%; bottom: 14px; max-width: 60%; padding: 5px 8px; border: 1px solid rgba(255, 179, 71, .35); background: rgba(24, 18, 10, .9); color: #ffcc8a; font-size: 9px; transform: translateX(-50%); pointer-events: none; }
+.map-cursor { position: absolute; z-index: 3; left: 14px; bottom: 14px; padding: 5px 8px; border: 1px solid rgba(255,255,255,.12); background: rgba(12, 18, 13, .82); color: #a9b7a3; font-family: ui-monospace, monospace; font-size: 9px; pointer-events: none; }
 </style>

@@ -1,13 +1,17 @@
 import {
   Cartesian2, Cartesian3, Cartographic, Color, ColorGeometryInstanceAttribute, EllipsoidTerrainProvider, GeometryInstance,
-  GroundPolylineGeometry, GroundPolylinePrimitive, PolylineColorAppearance, Rectangle, createWorldImageryAsync, createWorldTerrainAsync,
-  HeadingPitchRange, Ion, LabelStyle, Math as CesiumMath, Matrix4, NearFarScalar,
-  ScreenSpaceEventHandler, ScreenSpaceEventType, VerticalOrigin, Viewer,
+  GroundPolylineGeometry, GroundPolylinePrimitive, ImageryLayer, PerspectiveFrustum, PolylineColorAppearance, Rectangle,
+  createWorldImageryAsync, createWorldTerrainAsync, HeadingPitchRange, Ion, Math as CesiumMath, Matrix4,
+  ScreenSpaceEventHandler, ScreenSpaceEventType, Viewer,
 } from 'cesium';
 import { APP_CONFIG } from '../config';
 import type { GameSession } from '../core/session';
-import type { LonLat, RailSegment, Station } from '../types';
+import type { CameraMode, LonLat, RailSegment, Station } from '../types';
+import { BASEMAPS, DEFAULT_MAP_TILES, type MapTileId } from './basemap';
+import { fixedCameraFov, fixedCameraPose } from './cameraPose';
+import { createGcj02ImageryProvider } from './gcj02ImageryProvider';
 import { RailRenderer } from './RailRenderer';
+import { StationLabelRenderer } from './StationLabelRenderer';
 import { TrainRenderer } from './TrainRenderer';
 import { offsetPoint } from '../utils/geo';
 import { withTimeout } from '../utils/assets';
@@ -21,16 +25,21 @@ export class CesiumMap {
   private serviceGeneration = 0;
   private servicesLoading?: Promise<void>;
   private removeRenderError?: () => void;
-  private imageryLoaded = false;
+  private mapTiles: MapTileId = DEFAULT_MAP_TILES;
+  private tileLayers: ImageryLayer[] = [];
+  private tileGeneration = 0;
+  private tileLoadFailed = false;
   private railRenderer!: RailRenderer;
   private provinceRailway?: GroundPolylinePrimitive;
   private trainRenderer!: TrainRenderer;
+  private stationLabels!: StationLabelRenderer;
   private handler?: ScreenSpaceEventHandler;
   private session?: GameSession;
   private cameraTarget?: Cartesian3;
   private cameraRange: number = APP_CONFIG.camera.range;
   private cameraRangeDirty = true;
-  private cameraMode: 'cab' | 'external' = 'cab';
+  private cameraMode: CameraMode = 'cab';
+  private defaultFov = Math.PI / 3;
   private cabHeading?: number;
   private animationFrame = 0;
   private previousTime = 0;
@@ -63,9 +72,15 @@ export class CesiumMap {
     this.viewer.scene.screenSpaceCameraController.minimumZoomDistance = APP_CONFIG.camera.minRange;
     this.viewer.scene.screenSpaceCameraController.maximumZoomDistance = 20_000_000;
     this.viewer.camera.setView({ destination: Cartesian3.fromDegrees(108, 34, 10_500_000) });
+    const initialFrustum = this.viewer.camera.frustum;
+    if (initialFrustum instanceof PerspectiveFrustum) this.defaultFov = (initialFrustum as PerspectiveFrustum).fov ?? this.defaultFov;
     this.viewer.cesiumWidget.creditContainer.setAttribute('style', 'font-size:10px;opacity:.65');
     this.railRenderer = new RailRenderer(this.viewer, this.session!.elevation);
     this.trainRenderer = new TrainRenderer(this.viewer);
+    this.stationLabels = new StationLabelRenderer(this.viewer);
+    // Apply the selected raster source before the first visible frame; AMap
+    // needs no ion round-trip and starts loading immediately.
+    this.applyMapTiles(this.mapTiles);
     this.setupPicking();
     this.removeRenderError = this.viewer.scene.renderError.addEventListener(() => {
       if (this.session) this.session.paused = true;
@@ -79,9 +94,16 @@ export class CesiumMap {
   /** Optional online scenery never blocks entry into the simulator. */
   retryServices(): Promise<void> {
     if (this.servicesLoading) return this.servicesLoading;
-    this.servicesLoading = this.loadServices().catch(() => {
+    this.servicesLoading = this.loadServices().then(() => {
+      // Retry a failed Bing layer only after the terrain attempt; AMap is already
+      // resident as a fallback and does not need to be recreated.
+      if (!this.disposed && this.tileLoadFailed) {
+        this.tileLoadFailed = false;
+        this.applyMapTiles(this.mapTiles);
+      }
+    }).catch(() => {
       if (this.disposed) return;
-      this.serviceStatus = '地图服务恢复失败，请重试；当前驾驶进度已保留';
+      this.serviceStatus = '地形服务恢复失败，请重试；当前驾驶进度已保留';
       this.onStatus?.(this.serviceStatus);
     }).finally(() => { this.servicesLoading = undefined; });
     return this.servicesLoading;
@@ -90,24 +112,23 @@ export class CesiumMap {
   private async loadServices(): Promise<void> {
     const generation = ++this.serviceGeneration;
     const current = () => !this.disposed && generation === this.serviceGeneration && !this.viewer.isDestroyed();
-    this.serviceStatus = '正在加载卫星影像和地形，可先选择车站';
+    this.serviceStatus = '正在加载地形，可先选择车站';
     this.onStatus?.(this.serviceStatus);
-    const results = await Promise.allSettled([
+    const [terrain] = await Promise.allSettled([
       withTimeout(createWorldTerrainAsync(), 12_000, '地形服务连接超时'),
-      this.imageryLoaded ? Promise.resolve(undefined) : withTimeout(createWorldImageryAsync(), 12_000, '卫星影像连接超时'),
     ]);
     if (!current()) return;
-    const [terrain, imagery] = results;
     if (terrain.status === 'fulfilled') {
       this.viewer.terrainProvider = terrain.value;
       this.session?.elevation.setProvider(terrain.value);
     }
-    if (imagery.status === 'fulfilled' && imagery.value) {
-      this.viewer.imageryLayers.addImageryProvider(imagery.value);
-      this.imageryLoaded = true;
+    const unavailable = terrain.status === 'rejected' ? '地形' : '';
+    if (unavailable) {
+      this.serviceStatus = '地形暂不可用，已使用基础地球；可继续驾驶或重试';
+    } else if (!this.serviceStatus.startsWith('Bing') && !this.serviceStatus.startsWith('正在加载 Bing')) {
+      // Do not erase a Bing loading/failure message when terrain finishes later.
+      this.serviceStatus = '';
     }
-    const unavailable = [terrain.status === 'rejected' ? '地形' : '', imagery.status === 'rejected' ? '卫星影像' : ''].filter(Boolean);
-    this.serviceStatus = unavailable.length ? `${unavailable.join('、')}暂不可用，已使用基础地球；可继续驾驶或重试` : '';
     this.onStatus?.(this.serviceStatus);
     this.viewer.useDefaultRenderLoop = true;
     this.viewer.scene.requestRender();
@@ -117,6 +138,85 @@ export class CesiumMap {
         this.onStatus?.('地形已恢复，附近轨道将在下一次更新时重绘');
       });
     }
+  }
+
+  /** Switch the 3D raster source without rebuilding the Viewer or railway data. */
+  setMapTiles(tiles: MapTileId): void {
+    const changed = tiles !== this.mapTiles;
+    this.mapTiles = tiles;
+    if (!this.viewer || this.viewer.isDestroyed()) return;
+    if (!changed && this.tileLayers.length) return;
+    this.applyMapTiles(tiles);
+  }
+
+  private applyMapTiles(tiles: MapTileId): void {
+    if (this.disposed || !this.viewer || this.viewer.isDestroyed()) return;
+    this.mapTiles = tiles;
+    this.tileGeneration++;
+    this.tileLoadFailed = false;
+    this.removeTileLayers();
+    if (tiles === 'bing') {
+      void this.loadBingImagery(this.tileGeneration);
+      return;
+    }
+    // A previous Bing failure/loading message must not survive an explicit
+    // AMap switch, but an unrelated terrain warning should stay visible.
+    if (!this.serviceStatus || this.serviceStatus.startsWith('Bing') || this.serviceStatus.startsWith('正在加载 Bing')) {
+      this.serviceStatus = '';
+      this.onStatus?.('');
+    }
+    this.addAmapTileLayers(tiles);
+  }
+
+  private addAmapTileLayers(tiles: Exclude<MapTileId, 'bing'>): void {
+    if (!this.viewer || this.viewer.isDestroyed()) return;
+    const basemap = BASEMAPS[tiles];
+    const addLayer = (urlTemplate: string | undefined, hasAlphaChannel: boolean, credit: string) => {
+      if (!urlTemplate) return;
+      const provider = createGcj02ImageryProvider({
+        urlTemplate,
+        minimumLevel: basemap.minZoom,
+        maximumLevel: basemap.maxZoom,
+        subdomains: basemap.subdomains ?? ['1', '2', '3', '4'],
+        hasAlphaChannel,
+        credit,
+      });
+      const layer = new ImageryLayer(provider);
+      this.viewer.imageryLayers.add(layer);
+      this.tileLayers.push(layer);
+    };
+    addLayer(basemap.tileUrlTemplate, false, basemap.attribution);
+    if (tiles === 'amap-hybrid') addLayer(basemap.overlayTileUrlTemplate, true, '');
+  }
+
+  private async loadBingImagery(generation: number): Promise<void> {
+    this.serviceStatus = '正在加载 Bing 卫星影像，可先选择车站';
+    this.onStatus?.(this.serviceStatus);
+    try {
+      const provider = await withTimeout(createWorldImageryAsync(), 12_000, 'Bing 卫星影像连接超时');
+      if (this.disposed || generation !== this.tileGeneration || !this.viewer || this.viewer.isDestroyed()) return;
+      const layer = this.viewer.imageryLayers.addImageryProvider(provider);
+      this.tileLayers.push(layer);
+      this.serviceStatus = '';
+      this.onStatus?.('');
+    } catch {
+      if (this.disposed || generation !== this.tileGeneration || !this.viewer || this.viewer.isDestroyed()) return;
+      this.tileLoadFailed = true;
+      this.addAmapTileLayers('amap-satellite');
+      this.serviceStatus = 'Bing 卫星影像加载失败，已临时使用高德卫星；可重试地图或更换瓦片';
+      this.onStatus?.(this.serviceStatus);
+    }
+  }
+
+  private removeTileLayers(): void {
+    if (!this.viewer || this.viewer.isDestroyed()) {
+      this.tileLayers = [];
+      return;
+    }
+    for (const layer of this.tileLayers) {
+      if (this.viewer.imageryLayers.contains(layer)) this.viewer.imageryLayers.remove(layer, true);
+    }
+    this.tileLayers = [];
   }
 
   attachSession(session: GameSession): void {
@@ -165,32 +265,14 @@ export class CesiumMap {
     this.railRenderer.clear();
   }
 
+  /** Overview and map-selection stations; labels de-clutter automatically. */
   showStations(stations: Station[]): void {
-    const collection = this.viewer.entities;
-    collection.values.filter((entity) => entity.id.startsWith('station-')).forEach((entity) => collection.remove(entity));
-    stations.forEach((station) => {
-      collection.add({
-        id: `station-${station.telecode}`,
-        position: Cartesian3.fromDegrees(station.longitude, station.latitude, 30),
-        point: { pixelSize: 7, color: Color.fromCssColorString('#d8ff62'), outlineColor: Color.BLACK, outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY },
-        label: {
-          text: station.name,
-          font: '12px sans-serif',
-          fillColor: Color.WHITE,
-          outlineColor: Color.BLACK,
-          outlineWidth: 3,
-          style: LabelStyle.FILL_AND_OUTLINE,
-          verticalOrigin: VerticalOrigin.BOTTOM,
-          pixelOffset: new Cartesian2(0, -12),
-          scaleByDistance: new NearFarScalar(1000, 1, 50_000, 0),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
-      });
-    });
+    this.stationLabels?.showOverview(stations);
   }
 
+  /** Remove station dots and labels; driving labels are rebuilt from the train. */
   clearStations(): void {
-    this.viewer.entities.values.filter((entity) => entity.id.startsWith('station-')).forEach((entity) => this.viewer.entities.remove(entity));
+    this.stationLabels?.clear();
   }
 
   flyTo(point: LonLat, range = 25_000): void {
@@ -209,20 +291,25 @@ export class CesiumMap {
     this.cameraRangeDirty = true;
   }
 
-  setCameraMode(mode: 'cab' | 'external'): void {
+  setCameraMode(mode: CameraMode): void {
     this.cameraMode = mode;
     this.cameraTarget = undefined;
     this.cabHeading = undefined;
     this.cameraRangeDirty = true;
     this.viewer.camera.lookAtTransform(Matrix4.IDENTITY);
+    // 固定视角会为取景放宽视场，切回驾驶室/自由视角时恢复默认镜头。
+    if (mode !== 'fixed') this.applyFov(this.defaultFov);
   }
 
   destroy(): void {
     this.disposed = true;
     this.serviceGeneration++;
+    this.tileGeneration++;
+    this.tileLayers = [];
     cancelAnimationFrame(this.animationFrame);
     this.removeRenderError?.();
     if (this.viewer && !this.viewer.isDestroyed()) {
+      this.stationLabels?.clear();
       this.railRenderer?.clear();
       this.clearProvinceRailway();
     }
@@ -255,14 +342,18 @@ export class CesiumMap {
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.previousTime) / 1000);
     this.previousTime = now;
+    let stationCenter: LonLat | undefined;
     if (this.session?.running) {
       const points = this.session.consistPoints();
+      stationCenter = points[0];
       const inCab = this.cameraMode === 'cab';
-      this.viewer.scene.screenSpaceCameraController.enableInputs = !inCab;
+      // 只有“第三人称自由”允许玩家旋转/缩放；固定视角和驾驶室每帧重置相机。
+      this.viewer.scene.screenSpaceCameraController.enableInputs = this.cameraMode === 'free';
       this.trainRenderer.update(inCab ? [] : points);
       if (points[0]) {
         const point = points[0];
         if (inCab) this.driveFromCab(point.lon, point.lat, point.height, point.heading, dt);
+        else if (this.cameraMode === 'fixed') this.followFixed(point.lon, point.lat, point.height, point.heading);
         else this.follow(point.lon, point.lat, point.height, point.heading, dt);
       }
     } else {
@@ -271,6 +362,9 @@ export class CesiumMap {
       this.cabHeading = undefined;
       this.trainRenderer.update([]);
     }
+    // Driving station dots/labels are bounded by APP_CONFIG.stationLabels and
+    // rebuilt only after the train has moved far enough.
+    this.stationLabels?.update(now, stationCenter, this.session?.stations.stations ?? []);
     this.animationFrame = requestAnimationFrame(this.animate);
   };
 
@@ -289,6 +383,25 @@ export class CesiumMap {
       destination: Cartesian3.fromDegrees(eye.lon, eye.lat, Math.max(height, ground ?? height) + APP_CONFIG.track.heightOffset + APP_CONFIG.camera.cabEyeHeight),
       orientation: { heading: this.cabHeading, pitch: APP_CONFIG.camera.cabPitch, roll: 0 },
     });
+  }
+
+  private followFixed(lon: number, lat: number, height: number, heading: number): void {
+    const canvas = this.viewer.scene.canvas;
+    this.applyFov(fixedCameraFov(canvas.clientWidth, canvas.clientHeight));
+    const pose = fixedCameraPose({ lon, lat, height }, heading);
+    this.viewer.camera.lookAtTransform(Matrix4.IDENTITY);
+    this.viewer.camera.setView({
+      destination: Cartesian3.fromDegrees(pose.lon, pose.lat, pose.altitude),
+      orientation: { heading: CesiumMath.toRadians(pose.heading), pitch: pose.pitch, roll: 0 },
+    });
+  }
+
+  private applyFov(fov: number): void {
+    if (!this.viewer || this.viewer.isDestroyed()) return;
+    const frustum = this.viewer.camera.frustum;
+    if (!(frustum instanceof PerspectiveFrustum)) return;
+    const perspective = frustum as PerspectiveFrustum;
+    if (perspective.fov === undefined || Math.abs(perspective.fov - fov) > 1e-7) perspective.fov = fov;
   }
 
   private follow(lon: number, lat: number, height: number, heading: number, dt: number): void {

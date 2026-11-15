@@ -8,3 +8,4 @@ dist/
 output/
 # Runtime uses provincial files; keep the oversized merged source local.
 /data/cnrailway.geojson
+.tools/

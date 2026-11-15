@@ -1,5 +1,5 @@
 <script setup lang="ts">
-defineProps<{ hasSave: boolean; ready: boolean }>();
+defineProps<{ hasSave: boolean; ready: boolean; backgroundHint?: string }>();
 defineEmits<{ continue: []; new: []; saves: []; settings: [] }>();
 </script>
 
@@ -28,14 +28,9 @@ defineEmits<{ continue: []; new: []; saves: []; settings: [] }>();
           </div>
         </div>
       </div>
-      <div class="hero-aside" aria-hidden="true">
-        <div class="route-number">01<span>/ 中国铁路</span></div>
-        <div class="track-art"><i /><i /><i /><i /><i /><i /><i /><i /><i /></div>
-        <div class="coordinate">35.8617° N<br />104.1954° E</div>
-      </div>
     </section>
     <footer class="start-footer">
-      <span><i class="status-dot" :class="{ online: ready }" />{{ ready ? '系统就绪' : '正在加载地图与数据' }}</span>
+      <span><i class="status-dot" :class="{ online: ready }" />{{ ready ? (backgroundHint ? `系统就绪 · ${backgroundHint}` : '系统就绪') : '正在加载地图与数据' }}</span>
       <span>WGS84 · CESIUM 3D · LOCAL SAVE</span>
     </footer>
   </main>

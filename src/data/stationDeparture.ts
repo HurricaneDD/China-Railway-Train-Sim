@@ -9,7 +9,7 @@ import { nearestOnSegment, pointAt } from '../utils/geo';
  * The source data has no official station-yard or track-number table, so this
  * module only exposes nearby original lines. It deliberately performs no
  * topology query: selecting a station must not trigger a whole-network
- * ensureAttachments() build.
+ * boundary/exit build.
  */
 
 /** Slice a segment symmetrically around an offset without moving its coordinates. */

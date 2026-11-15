@@ -52,10 +52,12 @@ const copyDiagnostics = async () => {
   <div class="modal-backdrop junction-backdrop">
     <section class="junction-dialog" role="dialog" aria-modal="true" aria-labelledby="junction-title">
       <header class="junction-header">
-        <div>
+        <div class="junction-heading">
           <p class="eyebrow">JUNCTION AHEAD · 前方道岔</p>
-          <h2 id="junction-title">选择走行线路</h2>
-          <p class="junction-current">当前：{{ junction.currentName }} <span>·</span> 列车已暂停推进</p>
+          <div class="junction-title-row">
+            <h2 id="junction-title">选择走行线路</h2>
+            <p class="junction-current">当前线路：<b>{{ junction.currentName }}</b></p>
+          </div>
         </div>
         <div class="junction-head-status">
           <span class="junction-status-dot" />
@@ -65,14 +67,6 @@ const copyDiagnostics = async () => {
 
       <div class="junction-body">
         <section class="junction-map-panel" aria-label="附近配线图面板">
-          <div class="junction-section-head">
-            <div>
-              <h3>附近配线图</h3>
-              <p>地理底图叠加真实线路坐标；灰线为周边线路，彩色线为本次可选走线。</p>
-            </div>
-            <span class="junction-map-hint">点击线路选择</span>
-          </div>
-
           <JunctionMap :junction="junction" :selected="selected" @select="selectOption" />
 
           <div class="junction-map-legend" aria-label="地图图例">
@@ -82,14 +76,12 @@ const copyDiagnostics = async () => {
             <span><i class="legend-node" />道岔位置</span>
             <span><i class="legend-arrow">↑</i>行驶方向</span>
           </div>
-          <p class="junction-map-caption">地图北向上、横纵同尺度；底图仅作地理参考，不表示真实道岔联锁或信号开放状态。</p>
         </section>
 
         <aside class="junction-choice-panel" aria-label="走行线路选择">
           <div class="junction-section-head">
             <div>
               <h3>可选走行线路</h3>
-              <p>选择后仍可在地图和选项中改选，确认前不会推进列车。</p>
             </div>
             <span class="junction-choice-count">{{ selectionCounter }}</span>
           </div>

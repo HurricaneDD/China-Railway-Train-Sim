@@ -2,8 +2,9 @@
  * Standard Web Mercator (EPSG:3857) helpers shared by the inspector and the
  * in-drive junction map.
  *
- * The railway data is WGS84 (EPSG:4326). Web Mercator is a direct projection of
- * WGS84 longitude/latitude, so no GCJ-02 or BD-09 conversion is applied.
+ * Railway data is WGS84 (EPSG:4326), and this module never applies a datum
+ * shift. A caller using GCJ-02 Chinese basemap tiles must convert its display
+ * coordinates first (see `gcj02.ts`); calculations keep the original WGS84.
  */
 export const WEB_MERCATOR_MAX_LATITUDE = 85.05112878;
 export const WEB_MERCATOR_TILE_SIZE = 256;

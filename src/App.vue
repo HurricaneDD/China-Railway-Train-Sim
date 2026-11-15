@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import DrivingHud from './components/DrivingHud.vue';
+import HomeBackdrop from './components/HomeBackdrop.vue';
 import JunctionDialog from './components/JunctionDialog.vue';
 import MapView from './components/MapView.vue';
 import NewGamePanel from './components/NewGamePanel.vue';
@@ -14,7 +15,7 @@ import { GameSession } from './core/session';
 import { loadSettings, saveSettings, saveStore, validateGameSave } from './core/storage';
 import { buildStationDeparture, lineBearing } from './data/stationDeparture';
 import type { CesiumMap } from './map/CesiumMap';
-import type { GameSave, LonLat, Reverser, Station, StationDeparture, StationDepartureLine } from './types';
+import type { CameraMode, GameSave, LonLat, Reverser, Station, StationDeparture, StationDepartureLine } from './types';
 import { compassDirection, distance } from './utils/geo';
 
 const session = new GameSession();
@@ -23,9 +24,10 @@ const screen = ref<'menu' | 'new' | 'driving'>('menu');
 const overlay = ref<'saves' | 'settings' | null>(null);
 // Cesium maintains identity-sensitive object graphs; keep them outside deep reactivity.
 const map = shallowRef<CesiumMap>();
-const cameraMode = ref<'cab' | 'external'>('cab');
+const cameraMode = ref<CameraMode>('cab');
 const mapReady = ref(false);
 const dataReady = ref(false);
+const mapStatus = ref('');
 const busy = ref(false);
 const hasSave = ref(false);
 const saves = ref<GameSave[]>([]);
@@ -46,6 +48,9 @@ let toastTimer = 0;
 let lastRenderPoint: LonLat | undefined;
 let renderingTrack = false;
 const ready = computed(() => mapReady.value && dataReady.value);
+const backgroundHint = computed(() =>
+  ready.value && mapStatus.value.startsWith('正在加载') ? '地图瓦片与地形后台加载中' : '',
+);
 
 session.onUpdate = () => {
   updateKey.value++;
@@ -60,7 +65,7 @@ onMounted(async () => {
   window.addEventListener('keydown', keyDown);
   window.addEventListener('keyup', keyUp);
   window.addEventListener('pointerup', releaseControls);
-  window.addEventListener('blur', loseFocus);
+  window.addEventListener('blur', releaseFocusInputs);
   document.addEventListener('visibilitychange', visibilityChanged);
   try {
     await session.initialize();
@@ -78,7 +83,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', keyDown);
   window.removeEventListener('keyup', keyUp);
   window.removeEventListener('pointerup', releaseControls);
-  window.removeEventListener('blur', loseFocus);
+  window.removeEventListener('blur', releaseFocusInputs);
   document.removeEventListener('visibilitychange', visibilityChanged);
 });
 
@@ -333,10 +338,12 @@ async function returnMenu(): Promise<void> {
   screen.value = 'menu';
   overlay.value = null;
   map.value?.setPicking();
+  map.value?.clearStations();
   await refreshSaves();
 }
 
 function changeSettings(value: GameSettings): void {
+  if (value.mapTiles !== settings.value.mapTiles) map.value?.setMapTiles(value.mapTiles);
   settings.value = value;
   horn.enabled = value.sound;
   saveSettings(value);
@@ -347,9 +354,9 @@ function changeReverser(value: Reverser): void {
   if (!session.setReverser(value)) notify('列车尚未停稳，速度不超过 0.5 km/h 才能换向', true);
 }
 
-function toggleCamera(): void {
-  cameraMode.value = cameraMode.value === 'cab' ? 'external' : 'cab';
-  map.value?.setCameraMode(cameraMode.value);
+function setCameraMode(mode: CameraMode): void {
+  cameraMode.value = mode;
+  map.value?.setCameraMode(mode);
 }
 
 function triggerSand(): void {
@@ -390,17 +397,20 @@ function releaseControls(): void {
   horn.stop();
 }
 
-function loseFocus(): void {
+/**
+ * 失焦或切后台只释放可能卡住的按键/鸣笛，不暂停驾驶。
+ * 浏览器在标签页隐藏时会暂停 requestAnimationFrame，列车实际停在原处；
+ * 返回页面后按最大帧差 100 ms 继续，不补算后台时间。
+ */
+function releaseFocusInputs(): void {
   session.clearControls();
   horn.stop();
-  if (screen.value === 'driving') userPaused.value = true;
 }
 
 function visibilityChanged(): void {
-  if (document.hidden) {
-    loseFocus();
-    if (settings.value.autosave) void autoSave();
-  }
+  if (!document.hidden) return;
+  releaseFocusInputs();
+  if (settings.value.autosave) void autoSave();
 }
 
 async function retryData(): Promise<void> {
@@ -413,15 +423,17 @@ async function retryData(): Promise<void> {
 
 <template>
   <div class="app-shell" :class="{ 'is-driving': screen === 'driving' }">
-    <MapView :session="session" @ready="map = $event; mapReady = true" @error="notify($event, true); userPaused = true" />
-    <div v-if="screen !== 'driving'" class="map-shade" />
-    <StartMenu v-if="screen === 'menu'" :has-save="hasSave" :ready="ready" @continue="continueGame" @new="newGame" @saves="openOverlay('saves')" @settings="openOverlay('settings')" />
+    <!-- Cesium stays mounted behind the landing page so imagery and terrain keep loading. -->
+    <MapView :session="session" :hide-loading-status="screen === 'menu'" :map-tiles="settings.mapTiles" @ready="map = $event; mapReady = true" @status="mapStatus = $event" @error="notify($event, true); userPaused = true" />
+    <div v-if="screen === 'new'" class="map-shade" />
+    <HomeBackdrop v-if="screen === 'menu'" />
+    <StartMenu v-if="screen === 'menu'" :has-save="hasSave" :ready="ready" :background-hint="backgroundHint" @continue="continueGame" @new="newGame" @saves="openOverlay('saves')" @settings="openOverlay('settings')" />
     <div v-else-if="screen === 'new'" class="workspace">
 
       <NewGamePanel v-if="!selectingMap" :stations="session.stations" :provinces="session.railway.provinces" :selected-province="selectedProvince" :busy="busy" @close="screen = 'menu'" @province="selectProvince" @station="startStation" @location="enableMapSelection" />
       <div v-if="selectingMap" class="map-select-banner"><span class="pulse" />地图选点已启用 · 点击铁路附近位置<button @click="selectingMap = false; map?.setPicking()">返回选站</button></div>
     </div>
-    <DrivingHud v-else :session="session" :update-key="updateKey" :camera-range="settings.cameraRange" :camera-mode="cameraMode" @view="toggleCamera" @pause="userPaused = !userPaused" @help="showHelp = true" @parking="session.toggleParkingBrake()" @retry="session.retryBorder()" @menu="returnMenu" @save="quickSave" @settings="openOverlay('settings')" @reverser="changeReverser" @horn="(held) => held ? horn.start() : horn.stop()" @sand="triggerSand" @camera="(range) => { map?.setCameraRange(range); settings.cameraRange = Math.max(35, Math.min(900, range)); }" @speed="session.setSimulationSpeed($event)" />
+    <DrivingHud v-else :session="session" :update-key="updateKey" :camera-range="settings.cameraRange" :camera-mode="cameraMode" :paused="userPaused" @view="setCameraMode" @pause="userPaused = !userPaused" @help="showHelp = true" @parking="session.toggleParkingBrake()" @retry="session.retryBorder()" @menu="returnMenu" @save="quickSave" @saves="openOverlay('saves')" @settings="openOverlay('settings')" @reverser="changeReverser" @horn="(held) => held ? horn.start() : horn.stop()" @sand="triggerSand" @camera="(range) => { map?.setCameraRange(range); settings.cameraRange = Math.max(35, Math.min(900, range)); }" @speed="session.setSimulationSpeed($event)" />
     <StationDepartureDialog v-if="departure" :departure="departure" :busy="busy" @close="departure = null" @depart="departFromStation" />
     <JunctionDialog v-if="session.junction && !showHelp && !userPaused && !overlay" :junction="session.junction" @choose="(id) => session.chooseJunction(id)" />
     <div v-if="screen === 'driving' && showHelp" class="modal-backdrop">
@@ -434,7 +446,7 @@ async function retryData(): Promise<void> {
           <li><b>02 · 滑行与停车</b><span>Ctrl 降低牵引。按住空格约 4 秒施加全部制动，松开后约 4 秒缓解；停稳后可启用驻车。</span></li>
           <li><b>03 · 选择方向</b><span>分岔处会暂停，选择后继续。倒车需先停稳；P / Esc 随时暂停。</span></li>
         </ol>
-        <p class="fine-print">可选练习：累计行驶 1 km 后停稳。自由驾驶不受练习限制；邻近车站距离为直线距离。人工检查线路时可使用 5× / 10× / 20× 模拟速度，遇到分岔或线路中断仍会自动暂停。</p>
+        <p class="fine-print">可选练习：累计行驶 1 km 后停稳。自由驾驶不受练习限制；邻近车站距离为直线距离。人工检查线路时可使用 5× / 10× / 20× / 30× / 50× 模拟速度，遇到分岔或线路中断仍会自动暂停。</p>
         <button class="button button-primary full-width" @click="showHelp = false">进入驾驶</button>
       </section>
     </div>

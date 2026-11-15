@@ -2,6 +2,11 @@ export function dataUrl(path: string): string {
   return new URL(`${import.meta.env.BASE_URL}data/${path}`, document.baseURI).toString();
 }
 
+/** Static interface media (background slides) lives outside the provincial data set. */
+export function mediaUrl(path: string): string {
+  return new URL(`${import.meta.env.BASE_URL}media/${path}`, document.baseURI).toString();
+}
+
 /** Bound optional remote services without holding the driving entry indefinitely. */
 export async function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;

@@ -149,6 +149,9 @@ export interface JunctionRequest {
 
 export type Reverser = -1 | 0 | 1;
 
+/** cab：驾驶室；free：可旋转缩放的第三人称自由视角；fixed：跟随列车后上方的第三人称固定视角。 */
+export type CameraMode = 'cab' | 'free' | 'fixed';
+
 export interface TrainState {
   velocity: number;
   throttle: number;

@@ -1,20 +1,25 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { CesiumMap } from '../map/CesiumMap';
 import type { GameSession } from '../core/session';
+import type { MapTileId } from '../map/basemap';
 
-const props = defineProps<{ session: GameSession }>();
+const props = defineProps<{ session: GameSession; hideLoadingStatus?: boolean; mapTiles: MapTileId }>();
 const emit = defineEmits<{ ready: [map: CesiumMap]; error: [message: string]; status: [message: string] }>();
 const container = ref<HTMLDivElement>();
 const warning = ref('');
 const fatal = ref(false);
 const retrying = ref(false);
+const showStatus = computed(() =>
+  !!warning.value && (!props.hideLoadingStatus || fatal.value || !warning.value.startsWith('正在加载')),
+);
 let map = new CesiumMap();
 let disposed = false;
 
 async function initialize(): Promise<void> {
   try {
     map.attachSession(props.session);
+    map.setMapTiles(props.mapTiles);
     map.onStatus = message => { warning.value = message; emit('status', message); };
     map.onError = message => { warning.value = message; emit('error', message); };
     await map.initialize(container.value!);
@@ -42,13 +47,14 @@ async function retry(): Promise<void> {
 }
 
 defineExpose({ retry });
+watch(() => props.mapTiles, (tiles) => map.setMapTiles(tiles));
 onMounted(initialize);
 onBeforeUnmount(() => { disposed = true; map.destroy(); });
 </script>
 
 <template>
   <div ref="container" class="map-canvas" aria-label="三维铁路地图" />
-  <div v-if="warning" class="map-service-status" role="status">
+  <div v-if="showStatus" class="map-service-status" role="status">
     <span>{{ warning }}</span>
     <button :disabled="retrying" @click="retry">{{ retrying ? '重试中…' : '重试地图' }}</button>
     <button v-if="!fatal" aria-label="收起地图提示" @click="warning = ''">×</button>

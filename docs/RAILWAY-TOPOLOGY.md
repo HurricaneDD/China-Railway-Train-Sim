@@ -36,7 +36,8 @@ npx vite-node scripts/railway-diagnostics.ts 320000
 `dev/railway-check/` 提供分省只读检查页（开发地址 `/dev/railway-check/`，构建输出 `dist/dev/railway-check/`）：
 
 - 按省加载当前正式 GeoJSON，显示普通/桥/隧区段；
-- 提供街道、卫星和无底图三种模式。街道使用 Esri World Street Map，卫星使用 Esri World Imagery；两者都是 WGS84 基准的 Web Mercator（EPSG:3857）瓦片。线路、断点与最近线路本身是 WGS84（EPSG:4326），按标准 Web Mercator 公式直接投影，**不做 GCJ-02/BD-09 偏移**；
+- 提供高德普通（street style=8）和高德卫星（style=6）两种模式。高德瓦片是 GCJ-02；线路、断点、最近线路和车站的正式数据仍是 WGS84（EPSG:4326），只在绘制显示副本时转 GCJ-02，再按标准 Web Mercator（EPSG:3857）投影。地图网格和底图为 GCJ-02 显示坐标，断点详情、导出 JSON 和鼠标 WGS84 读数不被改写；
+- 车站来自 `data/stations.json` 的有坐标记录，瓦片级别 ≥12 时显示车站标记和站名，并做简单标签防重叠；低缩放级别不显示，避免省域视图被标签淹没；
 - 以红色标出“存在被过滤连接”的断点，橙色标出“邻近线路未接入”，灰色标出孤立端点；
 - 点击断点查看来路区段、被拒候选的角度/间隙/属性、最近线路和 OSM ID；
 - 可加载相邻省份复核省界，可导出本省断点 JSON。底图加载失败时提示并回退到深色网格，线路和断点仍可检查。

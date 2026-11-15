@@ -11,10 +11,10 @@
   --line: rgba(255, 255, 255, .12);
   --muted: #96a090;
   --accent: #d8ff62;
-  --danger: #ff5a4e;
-  --warning: #ffb347;
-  --bridge: #58d6e8;
-  --tunnel: #b08cff;
+  --danger: #ff1e1e;
+  --warning: #ff9f00;
+  --bridge: #00e5ff;
+  --tunnel: #d37bff;
 }
 
 * { box-sizing: border-box; }
@@ -46,6 +46,8 @@ select { width: 100%; padding: 10px 11px; border: 1px solid #394237; border-radi
 .check-button.primary { border-color: var(--accent); color: var(--ink); background: var(--accent); font-weight: 700; }
 .check-button.primary:hover { background: #e4ff8f; }
 .load-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 9px; color: #7f8b7b; font-size: 9px; }
+.station-meta { flex-wrap: wrap; margin-top: 5px; }
+.station-error { color: var(--warning); }
 
 .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
 .stats-grid > div { min-height: 58px; padding: 11px 10px; border-right: 1px solid rgba(255,255,255,.07); border-bottom: 1px solid rgba(255,255,255,.07); }
@@ -64,7 +66,7 @@ select { width: 100%; padding: 10px 11px; border: 1px solid #394237; border-radi
 .basemap-caption span { display: block; color: #c4cfbe; font-size: 9px; }
 .basemap-caption small { display: block; margin-top: 3px; color: #798675; font-size: 8px; }
 .basemap-tabs { display: flex; flex-shrink: 0; gap: 3px; }
-.basemap-tabs button { min-width: 38px; padding: 5px 7px; border: 1px solid rgba(255,255,255,.12); color: #aeb8a9; background: #182018; font-size: 9px; }
+.basemap-tabs button { min-width: 38px; padding: 5px 7px; border: 1px solid rgba(255,255,255,.12); color: #aeb8a9; background: #182018; font-size: 9px; white-space: nowrap; }
 .basemap-tabs button.active { border-color: var(--accent); color: var(--ink); background: var(--accent); }
 .category-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 9px; }
 .category-tabs button { flex: 1 0 auto; padding: 6px 7px; border: 1px solid rgba(255,255,255,.1); color: #aeb8a9; background: #182018; font-size: 9px; white-space: nowrap; }
@@ -100,15 +102,16 @@ select { width: 100%; padding: 10px 11px; border: 1px solid #394237; border-radi
 .legend h2 { margin: 0 0 9px; color: #d7e2d1; font-family: 'Barlow Condensed', 'Noto Sans SC', sans-serif; font-size: 10px; font-weight: 600; letter-spacing: 1.5px; }
 .legend div { display: flex; align-items: center; gap: 7px; margin-top: 6px; color: #aab6a4; font-size: 9px; }
 .legend i { display: inline-block; flex-shrink: 0; }
-.legend .line { width: 18px; height: 2px; border-radius: 2px; }
-.legend .line.ground { background: #9aa690; }
+.legend .line { width: 18px; height: 2px; border-radius: 2px; box-shadow: 0 0 0 1px rgba(0,0,0,.7); }
+.legend .line.ground { background: #d8ff3f; }
 .legend .line.bridge { background: var(--bridge); }
 .legend .line.tunnel { background: var(--tunnel); }
-.legend .line.filtered-link { height: 0; border-top: 1px dashed #ffad4d; }
-.legend .dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid #0d110d; }
+.legend .line.filtered-link { height: 0; border-top: 1px dashed #ffb000; box-shadow: none; }
+.legend .dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid #fff; box-shadow: 0 0 0 1px #0d110d; }
 .legend .dot.filtered { background: var(--danger); }
 .legend .dot.nearby { background: var(--warning); }
-.legend .dot.isolated { background: #899287; }
+.legend .dot.isolated { background: #6f7a74; }
+.legend .dot.station { width: 7px; height: 7px; border-radius: 1px; border-color: #0d110d; background: #f4f8ee; box-shadow: none; }
 .map-note { position: absolute; z-index: 2; left: 16px; bottom: 66px; max-width: 310px; padding: 8px 10px; border-left: 2px solid rgba(216, 255, 98, .55); color: #8f9c89; background: rgba(13, 18, 14, .75); font-size: 9px; line-height: 1.65; pointer-events: none; }
 
 .check-loading { position: absolute; z-index: 8; top: 50%; left: 50%; display: flex; align-items: center; gap: 12px; padding: 16px 18px; border: 1px solid rgba(216, 255, 98, .35); background: rgba(13, 19, 14, .95); box-shadow: 0 14px 60px #0009; transform: translate(-50%, -50%); }

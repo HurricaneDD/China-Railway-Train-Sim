@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { StationDeparture } from '../types';
-import { BASEMAPS } from '../map/basemap';
+import type { LonLat, StationDeparture } from '../types';
+import { BASEMAPS, type BasemapProvider } from '../map/basemap';
 import { BasemapTiles, drawMapBackground, drawNorthArrow, drawScaleBar } from '../map/canvasLayer';
 import { closestScreenPath, fitLonLatPaths, panViewBy, pointAtPathFraction, screenOf, zoomViewAt, type MapView, type ScreenPath, type ScreenPoint } from '../map/junctionMap';
-import { unprojectMercator } from '../utils/mercator';
+import { wgs84ToGcj02, gcj02ToWgs84 } from '../utils/gcj02';
+import { projectMercator, unprojectMercator } from '../utils/mercator';
 
 const props = defineProps<{ departure: StationDeparture; selected?: string; direction: 1 | -1 | 0 }>();
 const emit = defineEmits<{ select: [segmentId: string] }>();
 
 const host = ref<HTMLDivElement>();
 const canvas = ref<HTMLCanvasElement>();
-const basemap = ref<'satellite' | 'plain'>('satellite');
+type StationBasemap = 'amap-satellite' | 'amap-street';
+const basemap = ref<StationBasemap>('amap-satellite');
 const hoverId = ref<string>();
 const tileState = ref<'loading' | 'ready' | 'error'>('loading');
 const size = ref({ width: 0, height: 0 });
@@ -28,7 +30,8 @@ const tiles = new BasemapTiles();
 
 const provider = computed(() => BASEMAPS[basemap.value]);
 const hoveredLine = computed(() => props.departure.lines.find(line => line.segmentId === hoverId.value));
-const basemapNotice = computed(() => tileState.value === 'loading' ? '底图加载中…' : tileState.value === 'error' ? '底图加载失败，线路仍按 WGS84 显示' : '');
+const basemapNotice = computed(() => tileState.value === 'loading' ? '底图加载中…' : tileState.value === 'error' ? '底图加载失败，线路仍可显示' : '');
+const coordinateNotice = computed(() => provider.value.coordinateSystem === 'gcj02' ? ' · GCJ-02 已配准' : '');
 
 function requestRender(): void {
   if (disposed || renderFrame) return;
@@ -38,15 +41,29 @@ function requestRender(): void {
   });
 }
 
-function screenPath(id: string, points: { lon: number; lat: number }[]): ScreenPath {
-  return { id, points: view ? points.map(point => screenOf(point, view!, size.value.width, size.value.height)) : [] };
+/** Railway data stays WGS84; only this display copy is converted for AMap tiles. */
+function displayPoint(point: LonLat): LonLat {
+  return provider.value.coordinateSystem === 'gcj02' ? wgs84ToGcj02(point) : point;
+}
+
+function displayCentreOf(viewValue: MapView): LonLat {
+  const centre = unprojectMercator(viewValue.cx, viewValue.cy);
+  return provider.value.coordinateSystem === 'gcj02' ? gcj02ToWgs84(centre) : centre;
+}
+
+function centreForProvider(point: LonLat, target: BasemapProvider): LonLat {
+  return target.coordinateSystem === 'gcj02' ? wgs84ToGcj02(point) : point;
+}
+
+function screenPath(id: string, points: LonLat[]): ScreenPath {
+  return { id, points: view ? points.map(point => screenOf(displayPoint(point), view!, size.value.width, size.value.height)) : [] };
 }
 
 function resetView(): void {
   if (!size.value.width || !size.value.height) return;
   const fitted = fitLonLatPaths([
-    ...props.departure.lines.map(line => line.points),
-    [{ lon: props.departure.center.lon, lat: props.departure.center.lat }],
+    ...props.departure.lines.map(line => line.points.map(displayPoint)),
+    [displayPoint({ lon: props.departure.center.lon, lat: props.departure.center.lat })],
   ], size.value.width, size.value.height, 48, 420);
   if (!fitted) return;
   baseScale = fitted.scale;
@@ -70,9 +87,13 @@ function resize(): void {
   if (!view) resetView(); else requestRender();
 }
 
-function setBasemap(next: 'satellite' | 'plain'): void {
-  if (basemap.value === next) return;
+function setBasemap(next: StationBasemap): void {
+  if (basemap.value === next || !view) return;
+  const geographicCentre = displayCentreOf(view);
   basemap.value = next;
+  const nextCentre = centreForProvider(geographicCentre, provider.value);
+  const projected = projectMercator(nextCentre.lon, nextCentre.lat);
+  view = { ...view, cx: projected.x, cy: projected.y };
   tileState.value = 'loading';
   requestRender();
 }
@@ -103,7 +124,7 @@ function drawBasemap(): void {
   }
   if (tileState.value !== 'ready') tileState.value = 'ready';
   const { width, height } = size.value;
-  ctx.fillStyle = basemap.value === 'satellite' ? 'rgba(4, 10, 7, .32)' : 'rgba(5, 10, 7, .16)';
+  ctx.fillStyle = basemap.value === 'amap-satellite' ? 'rgba(4, 10, 7, .30)' : 'rgba(5, 10, 7, .48)';
   ctx.fillRect(0, 0, width, height);
 }
 
@@ -145,7 +166,7 @@ function drawArrow(path: ScreenPath, fraction: number, color: string, size: numb
 
 function drawStation(): void {
   if (!ctx || !view) return;
-  const node = screenOf(props.departure.center, view, size.value.width, size.value.height);
+  const node = screenOf(displayPoint(props.departure.center), view, size.value.width, size.value.height);
   ctx.save();
   ctx.shadowColor = 'rgba(255, 255, 255, .55)';
   ctx.shadowBlur = 16;
@@ -162,7 +183,7 @@ function drawStation(): void {
   ctx.fillStyle = '#d8ff62';
   ctx.fill();
 
-  const label = '车站';
+  const label = props.departure.station.name;
   ctx.font = '600 10px "Noto Sans SC", system-ui, sans-serif';
   const width = ctx.measureText(label).width + 14;
   const x = Math.max(8, Math.min(size.value.width - width - 8, node.x + 13));
@@ -228,8 +249,7 @@ function draw(): void {
 
   drawStation();
   drawNorthArrow(ctx);
-  const center = unprojectMercator(view.cx, view.cy);
-  drawScaleBar(ctx, view, width, height, center.lat);
+  drawScaleBar(ctx, view, width, height, props.departure.center.lat);
   if (props.departure.lines.length === 0) {
     ctx.fillStyle = 'rgba(229, 237, 223, .55)';
     ctx.font = '12px "Noto Sans SC", system-ui, sans-serif';
@@ -298,6 +318,15 @@ function onKeyDown(event: KeyboardEvent): void {
   if ((event.code === 'Enter' || event.code === 'Space') && hoverId.value) {
     event.preventDefault();
     emit('select', hoverId.value!);
+  } else if (event.code === 'Equal' || event.code === 'NumpadAdd') {
+    event.preventDefault();
+    zoomButton(1.5);
+  } else if (event.code === 'Minus' || event.code === 'NumpadSubtract') {
+    event.preventDefault();
+    zoomButton(1 / 1.5);
+  } else if (event.code === 'Digit0' || event.code === 'Numpad0') {
+    event.preventDefault();
+    resetView();
   }
 }
 
@@ -321,11 +350,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="host" class="station-map-host">
-    <canvas ref="canvas" class="station-map-canvas" role="img" tabindex="0" aria-label="车站周边线路图。点击线路选择始发线路；滚轮缩放，拖动平移。灰色线路为车站附近国铁线路，绿色为已选线路。" @wheel.prevent="onWheel" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp" @pointerleave="onPointerLeave" @keydown="onKeyDown" />
+    <canvas ref="canvas" class="station-map-canvas" role="img" tabindex="0" aria-label="车站周边线路图。点击线路选择始发线路；滚轮缩放，拖动平移，加号减号按钮可缩放。灰色线路为车站附近国铁线路，绿色为已选线路。" @wheel.prevent="onWheel" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp" @pointerleave="onPointerLeave" @keydown="onKeyDown" />
     <div class="station-map-toolbar" aria-label="底图选择">
-      <span>底图</span>
-      <button :class="{ active: basemap === 'satellite' }" :aria-pressed="basemap === 'satellite'" @click="setBasemap('satellite')">卫星</button>
-      <button :class="{ active: basemap === 'plain' }" :aria-pressed="basemap === 'plain'" @click="setBasemap('plain')">普通</button>
+      <span>高德底图</span>
+      <button :class="{ active: basemap === 'amap-satellite' }" :aria-pressed="basemap === 'amap-satellite'" @click="setBasemap('amap-satellite')">卫星</button>
+      <button :class="{ active: basemap === 'amap-street' }" :aria-pressed="basemap === 'amap-street'" @click="setBasemap('amap-street')">街道</button>
     </div>
     <div class="station-map-zoom" aria-label="地图缩放">
       <button aria-label="放大" title="放大" @click="zoomButton(1.5)">＋</button>
@@ -337,7 +366,7 @@ onBeforeUnmount(() => {
       {{ hoveredLine.name === '未命名铁路' ? '未命名线路' : hoveredLine.name }} · 距站 {{ Math.round(hoveredLine.distance) }} m
     </p>
     <p class="station-map-hint">滚轮缩放 · 拖动平移 · 点击线路选择</p>
-    <p class="station-map-attribution">{{ provider.attribution }}</p>
+    <p class="station-map-attribution">{{ provider.attribution }}{{ coordinateNotice }}</p>
     <p v-if="!departure.lines.length" class="station-map-notice error">没有可选线路</p>
   </div>
 </template>

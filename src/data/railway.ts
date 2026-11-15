@@ -60,6 +60,9 @@ class SegmentMap extends Map<string, RailSegment> {
 }
 
 const cellKey = (point: LonLat, size: number = APP_CONFIG.data.spatialCellSize) => `${Math.floor(point.lon / size)},${Math.floor(point.lat / size)}`;
+/** ~5.5 m cells for interior-vertex attachment lookups; the tolerance is 2 m. */
+const ATTACHMENT_CELL_SIZE = 0.00005;
+const exitKey = (segmentId: string, direction: 1 | -1, offset: number) => `${segmentId}@${direction}@${offset.toFixed(6)}`;
 
 export class RailNetwork {
   readonly segments = new SegmentMap();
@@ -69,9 +72,15 @@ export class RailNetwork {
   private nodeGrid = new Map<string, Set<string>>();
   private featureParts = new Map<string, string[]>();
   private nodeSequence = 0;
-  private attachmentsDirty = true;
+  /** Per-segment lazy boundary cache; never rebuilt for the whole loaded network. */
   private boundaries = new Map<string, RailBoundary[]>();
+  /** Per-node lazy exit cache; filled only for nodes the train actually asks about. */
   private nodeExits = new Map<string, RailExit[]>();
+  /** Fine node grid for matching interior vertices without rebuilding a global hash. */
+  private attachmentNodes = new Map<string, RailNode[]>();
+  /** Load order keeps exit ordering stable after lazy construction. */
+  private segmentOrder = new Map<string, number>();
+  private segmentSequence = 0;
 
   constructor(private readonly loadJson: JsonFetcher = fetchJson) {}
 
@@ -107,21 +116,24 @@ export class RailNetwork {
         segment.startNode = this.connectNode(points[0], properties, id);
         segment.endNode = this.connectNode(points[points.length - 1], properties, id);
         this.segments.set(id, segment);
+        this.segmentOrder.set(id, this.segmentSequence++);
         this.indexSegment(segment);
         parts!.push(id);
       });
     });
     this.loadedProvinces.add(province.adcode);
-    this.attachmentsDirty = true;
+    // New endpoints or interior shared vertices can change old topology. Invalidate the
+    // lazy caches instead of rebuilding every loaded province on the next movement tick.
+    this.boundaries.clear();
+    this.nodeExits.clear();
     return { segments: this.segments.size, nodes: this.nodes.size };
   }
 
   /** Next existing endpoint/shared-vertex boundary, without splitting or moving source geometry. */
   nextBoundary(segmentId: string, offset: number, coordinateDirection: number): RailBoundary | undefined {
-    this.ensureAttachments();
     const segment = this.segments.get(segmentId);
     if (!segment) return;
-    const attachments = this.boundaries.get(segment.id)!;
+    const attachments = this.boundariesFor(segment);
     if (coordinateDirection > 0) return attachments.find(boundary => boundary.offset > offset + 0.000001) ?? attachments[attachments.length - 1];
     for (let index = attachments.length - 1; index >= 0; index--) {
       if (attachments[index].offset < offset - 0.000001) return attachments[index];
@@ -131,17 +143,15 @@ export class RailNetwork {
 
   /** Read-only snapshot for offline diagnostics; boundaries remain owned by the network. */
   boundariesOf(segmentId: string): RailBoundary[] {
-    this.ensureAttachments();
     const segment = this.segments.get(segmentId);
-    return segment ? (this.boundaries.get(segment.id) ?? []).map(boundary => ({ ...boundary })) : [];
+    return segment ? this.boundariesFor(segment).map(boundary => ({ ...boundary })) : [];
   }
 
   /** Oriented exits at a shared vertex, excluding only the direction just travelled from. */
   exitsAt(segmentId: string, boundary: RailBoundary, coordinateDirection: number): RailExit[] {
-    this.ensureAttachments();
     const segment = this.segments.get(segmentId);
     if (!segment) return [];
-    return (this.nodeExits.get(boundary.nodeId) ?? []).filter(exit => !(exit.segmentId === segment.id &&
+    return this.exitsFor(boundary.nodeId).filter(exit => !(exit.segmentId === segment.id &&
       Math.abs(exit.offset - boundary.offset) < 0.000001 && exit.direction === -Math.sign(coordinateDirection)));
   }
 
@@ -226,53 +236,87 @@ export class RailNetwork {
     return { points, length, stopReason, names: [...names], uncertain };
   }
 
-  private ensureAttachments(): void {
-    if (!this.attachmentsDirty) return;
-    this.attachmentsDirty = false;
-    this.boundaries.clear();
-    this.nodeExits.clear();
-    // A tight grid avoids scanning every station-yard endpoint for every original vertex.
-    const size = 0.00005;
-    const grid = new Map<string, RailNode[]>();
-    for (const node of this.nodes.values()) {
-      const key = cellKey(node, size);
-      const bucket = grid.get(key);
-      if (bucket) bucket.push(node); else grid.set(key, [node]);
+  /** Boundaries for one original segment, computed once per load generation. */
+  private boundariesFor(segment: RailSegment): RailBoundary[] {
+    const cached = this.boundaries.get(segment.id);
+    if (cached) return cached;
+    const attachments: RailBoundary[] = [];
+    segment.points.forEach((point, index) => {
+      let nodeId: string | undefined;
+      if (index === 0) nodeId = segment.startNode;
+      else if (index === segment.points.length - 1) nodeId = segment.endNode;
+      else nodeId = this.attachmentNodeNear(point)?.id;
+      if (!nodeId) return;
+      const offset = segment.cumulative[index];
+      if (attachments.some(boundary => Math.abs(boundary.offset - offset) < 0.000001)) return;
+      attachments.push({ offset, nodeId });
+    });
+    this.boundaries.set(segment.id, attachments);
+    return attachments;
+  }
+
+  /** Exits at one shared vertex, discovered from the local segment grid instead of a global pass. */
+  private exitsFor(nodeId: string): RailExit[] {
+    const cached = this.nodeExits.get(nodeId);
+    if (cached) return cached;
+    const exits: RailExit[] = [];
+    const node = this.nodes.get(nodeId);
+    if (!node) {
+      this.nodeExits.set(nodeId, exits);
+      return exits;
     }
-    for (const segment of this.segments.values()) {
-      const attachments: RailBoundary[] = [];
-      segment.points.forEach((point, index) => {
-        let nodeId: string | undefined;
-        if (index === 0) nodeId = segment.startNode;
-        else if (index === segment.points.length - 1) nodeId = segment.endNode;
-        else {
-          const cx = Math.floor(point.lon / size), cy = Math.floor(point.lat / size);
-          const rangeX = Math.ceil(APP_CONFIG.data.endpointTolerance / (110_000 * Math.cos(Math.min(89, Math.abs(point.lat)) * Math.PI / 180) * size));
-          const rangeY = Math.ceil(APP_CONFIG.data.endpointTolerance / (110_000 * size));
-          let nearest: number = APP_CONFIG.data.endpointTolerance;
-          for (let x = cx - rangeX; x <= cx + rangeX; x++) {
-            for (let y = cy - rangeY; y <= cy + rangeY; y++) {
-              for (const node of grid.get(`${x},${y}`) ?? []) {
-                const d = distance(point, node);
-                if (d <= nearest) { nearest = d; nodeId = node.id; }
-              }
-            }
-          }
-        }
-        if (!nodeId) return;
-        const offset = segment.cumulative[index];
-        if (attachments.some(boundary => Math.abs(boundary.offset - offset) < 0.000001)) return;
-        attachments.push({ offset, nodeId });
-        let exits = this.nodeExits.get(nodeId);
-        if (!exits) { exits = []; this.nodeExits.set(nodeId, exits); }
-        const addExit = (direction: 1 | -1) => exits!.push({
-          key: `${segment.id}@${direction}@${offset.toFixed(6)}`, segmentId: segment.id, offset, direction,
+    // Endpoints merged into this node are always candidates. Interior vertices of other
+    // segments are found from the local segment grid, so no whole-network build is needed.
+    const candidates = new Set(node.segmentIds);
+    const size = APP_CONFIG.data.spatialCellSize;
+    const tolerance = APP_CONFIG.data.endpointTolerance;
+    const latitudeSpan = tolerance / 110_000;
+    const outerLatitude = Math.min(89, Math.abs(node.lat) + latitudeSpan);
+    const longitudeSpan = tolerance / (110_000 * Math.cos(outerLatitude * Math.PI / 180));
+    for (let x = Math.floor((node.lon - longitudeSpan) / size); x <= Math.floor((node.lon + longitudeSpan) / size); x++) {
+      for (let y = Math.floor((node.lat - latitudeSpan) / size); y <= Math.floor((node.lat + latitudeSpan) / size); y++) {
+        this.segmentGrid.get(`${x},${y}`)?.forEach(id => candidates.add(id));
+      }
+    }
+    const orderOf = (id: string) => this.segmentOrder.get(id) ?? Number.MAX_SAFE_INTEGER;
+    const ordered = [...candidates]
+      .filter(id => this.segments.has(id))
+      .sort((a, b) => orderOf(a) - orderOf(b));
+    for (const id of ordered) {
+      const segment = this.segments.get(id)!;
+      // Cheap prefilter: no vertex can touch the node if the polyline itself is farther away.
+      const nearest = nearestOnSegment(segment, node);
+      if (!nearest || nearest.distance > tolerance) continue;
+      for (const boundary of this.boundariesFor(segment)) {
+        if (boundary.nodeId !== nodeId) continue;
+        if (boundary.offset > 0.000001) exits.push({
+          key: exitKey(segment.id, -1, boundary.offset), segmentId: segment.id, offset: boundary.offset, direction: -1,
         });
-        if (offset > 0.000001) addExit(-1);
-        if (offset < segment.length - 0.000001) addExit(1);
-      });
-      this.boundaries.set(segment.id, attachments);
+        if (boundary.offset < segment.length - 0.000001) exits.push({
+          key: exitKey(segment.id, 1, boundary.offset), segmentId: segment.id, offset: boundary.offset, direction: 1,
+        });
+      }
     }
+    this.nodeExits.set(nodeId, exits);
+    return exits;
+  }
+
+  /** Nearest existing node within the endpoint tolerance, using the maintained fine grid. */
+  private attachmentNodeNear(point: LonLat): RailNode | undefined {
+    const cx = Math.floor(point.lon / ATTACHMENT_CELL_SIZE), cy = Math.floor(point.lat / ATTACHMENT_CELL_SIZE);
+    const rangeX = Math.ceil(APP_CONFIG.data.endpointTolerance / (110_000 * Math.cos(Math.min(89, Math.abs(point.lat)) * Math.PI / 180) * ATTACHMENT_CELL_SIZE));
+    const rangeY = Math.ceil(APP_CONFIG.data.endpointTolerance / (110_000 * ATTACHMENT_CELL_SIZE));
+    let nearest: number = APP_CONFIG.data.endpointTolerance;
+    let found: RailNode | undefined;
+    for (let x = cx - rangeX; x <= cx + rangeX; x++) {
+      for (let y = cy - rangeY; y <= cy + rangeY; y++) {
+        for (const node of this.attachmentNodes.get(`${x},${y}`) ?? []) {
+          const d = distance(point, node);
+          if (d <= nearest) { nearest = d; found = node; }
+        }
+      }
+    }
+    return found;
   }
 
   nearest(point: LonLat, maxDistance: number): SnapResult | null {
@@ -368,6 +412,10 @@ export class RailNetwork {
       const key = cellKey(point);
       if (!this.nodeGrid.has(key)) this.nodeGrid.set(key, new Set());
       this.nodeGrid.get(key)!.add(id);
+      const attachmentKey = cellKey(point, ATTACHMENT_CELL_SIZE);
+      let bucket = this.attachmentNodes.get(attachmentKey);
+      if (!bucket) this.attachmentNodes.set(attachmentKey, bucket = []);
+      bucket.push(found);
     }
     if (!found.segmentIds.includes(segmentId)) found.segmentIds.push(segmentId);
     return found.id;

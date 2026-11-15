@@ -1,33 +1,39 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { JunctionRequest } from '../types';
-import { BASEMAPS, type BasemapId } from '../map/basemap';
+import type { JunctionRequest, LonLat } from '../types';
+import { BASEMAPS, type BasemapProvider } from '../map/basemap';
 import { BasemapTiles, drawMapBackground, drawNorthArrow, drawScaleBar } from '../map/canvasLayer';
-import { closestScreenPath, fitLonLatPaths, pointAtPathFraction, screenOf, type MapView, type ScreenPath, type ScreenPoint } from '../map/junctionMap';
+import { closestScreenPath, fitLonLatPaths, panViewBy, pointAtPathFraction, screenOf, zoomViewAt, type MapView, type ScreenPath, type ScreenPoint } from '../map/junctionMap';
+import { wgs84ToGcj02, gcj02ToWgs84 } from '../utils/gcj02';
+import { projectMercator, unprojectMercator } from '../utils/mercator';
 
 const props = defineProps<{ junction: JunctionRequest; selected?: string }>();
 const emit = defineEmits<{ select: [segmentId: string] }>();
 
+type JunctionBasemap = 'amap-satellite' | 'amap-street';
 const host = ref<HTMLDivElement>();
 const canvas = ref<HTMLCanvasElement>();
-const basemap = ref<Exclude<BasemapId, 'none'>>('satellite');
+const basemap = ref<JunctionBasemap>('amap-satellite');
 const hoverId = ref<string>();
 const tileState = ref<'loading' | 'ready' | 'error'>('loading');
 const size = ref({ width: 0, height: 0 });
 
 let ctx: CanvasRenderingContext2D | null = null;
 let view: MapView | undefined;
+let baseScale = 1;
 let resizeObserver: ResizeObserver | undefined;
 let renderFrame = 0;
 let disposed = false;
 let hitPaths: ScreenPath[] = [];
+let drag: { x: number; y: number; start: MapView; moved: boolean } | undefined;
 
 const tiles = new BasemapTiles();
 
 const optionCount = computed(() => props.junction.options.length);
 const provider = computed(() => BASEMAPS[basemap.value]);
 const hoveredOption = computed(() => props.junction.options.find(option => option.segmentId === hoverId.value));
-const basemapNotice = computed(() => tileState.value === 'loading' ? '底图加载中…' : tileState.value === 'error' ? '底图加载失败，线路仍按 WGS84 显示' : '');
+const basemapNotice = computed(() => tileState.value === 'loading' ? '底图加载中…' : tileState.value === 'error' ? '底图加载失败，线路仍可显示' : '');
+const coordinateNotice = computed(() => provider.value.coordinateSystem === 'gcj02' ? ' · GCJ-02 已配准' : '');
 
 function requestRender(): void {
   if (disposed || renderFrame) return;
@@ -37,17 +43,38 @@ function requestRender(): void {
   });
 }
 
-function screenPath(id: string, points: { lon: number; lat: number }[]): ScreenPath {
-  return { id, points: view ? points.map(point => screenOf(point, view!, size.value.width, size.value.height)) : [] };
+/** Railway data stays WGS84; only this display copy is converted for AMap tiles. */
+function displayPoint(point: LonLat): LonLat {
+  return provider.value.coordinateSystem === 'gcj02' ? wgs84ToGcj02(point) : point;
+}
+
+function displayCentreOf(viewValue: MapView): LonLat {
+  const centre = unprojectMercator(viewValue.cx, viewValue.cy);
+  return provider.value.coordinateSystem === 'gcj02' ? gcj02ToWgs84(centre) : centre;
+}
+
+function centreForProvider(point: LonLat, target: BasemapProvider): LonLat {
+  return target.coordinateSystem === 'gcj02' ? wgs84ToGcj02(point) : point;
+}
+
+function screenPath(id: string, points: LonLat[]): ScreenPath {
+  return { id, points: view ? points.map(point => screenOf(displayPoint(point), view!, size.value.width, size.value.height)) : [] };
 }
 
 function fit(): void {
   if (!size.value.width || !size.value.height) return;
-  view = fitLonLatPaths([
+  const fitted = fitLonLatPaths([
     props.junction.context.incoming,
     props.junction.options.flatMap(option => option.preview),
-  ], size.value.width, size.value.height, 44);
+  ].map(path => path.map(displayPoint)), size.value.width, size.value.height, 44);
+  if (!fitted) return;
+  view = fitted;
+  baseScale = fitted.scale;
   requestRender();
+}
+
+function resetView(): void {
+  fit();
 }
 
 function resize(): void {
@@ -63,14 +90,35 @@ function resize(): void {
   target.style.height = `${size.value.height}px`;
   ctx = target.getContext('2d');
   ctx?.setTransform(ratio, 0, 0, ratio, 0, 0);
-  fit();
+  if (!view) fit(); else requestRender();
 }
 
-function setBasemap(next: Exclude<BasemapId, 'none'>): void {
-  if (basemap.value === next) return;
+function setBasemap(next: JunctionBasemap): void {
+  if (basemap.value === next || !view) return;
+  const geographicCentre = displayCentreOf(view);
   basemap.value = next;
+  const nextCentre = centreForProvider(geographicCentre, provider.value);
+  const projected = projectMercator(nextCentre.lon, nextCentre.lat);
+  view = { ...view, cx: projected.x, cy: projected.y };
   tileState.value = 'loading';
   requestRender();
+}
+
+function zoomAt(x: number, y: number, factor: number): void {
+  if (!view) return;
+  view = zoomViewAt(view, size.value.width, size.value.height, x, y, factor, baseScale * 0.4, baseScale * 40);
+  requestRender();
+}
+
+function onWheel(event: WheelEvent): void {
+  const rect = canvas.value?.getBoundingClientRect();
+  if (!rect) return;
+  const factor = Math.max(0.5, Math.min(2, Math.exp(-event.deltaY * 0.0015)));
+  zoomAt(event.clientX - rect.left, event.clientY - rect.top, factor);
+}
+
+function zoomButton(factor: number): void {
+  zoomAt(size.value.width / 2, size.value.height / 2, factor);
 }
 
 function drawBasemap(): void {
@@ -82,7 +130,7 @@ function drawBasemap(): void {
   }
   if (tileState.value !== 'ready') tileState.value = 'ready';
   const { width, height } = size.value;
-  ctx.fillStyle = basemap.value === 'satellite' ? 'rgba(4, 10, 7, .30)' : 'rgba(5, 10, 7, .38)';
+  ctx.fillStyle = basemap.value === 'amap-satellite' ? 'rgba(4, 10, 7, .30)' : 'rgba(5, 10, 7, .48)';
   ctx.fillRect(0, 0, width, height);
 }
 
@@ -124,7 +172,7 @@ function drawArrow(path: ScreenPath, fraction: number, color: string, size: numb
 
 function drawNode(): void {
   if (!ctx || !view) return;
-  const node = screenOf(props.junction.context.center, view, size.value.width, size.value.height);
+  const node = screenOf(displayPoint(props.junction.context.center), view, size.value.width, size.value.height);
   ctx.save();
   ctx.shadowColor = 'rgba(216, 255, 98, .65)';
   ctx.shadowBlur = 18;
@@ -240,7 +288,7 @@ function draw(): void {
   }
 }
 
-function localPoint(event: PointerEvent | MouseEvent): ScreenPoint {
+function localPoint(event: PointerEvent | WheelEvent | MouseEvent): ScreenPoint {
   const rect = canvas.value!.getBoundingClientRect();
   return { x: event.clientX - rect.left, y: event.clientY - rect.top };
 }
@@ -249,37 +297,87 @@ function findOptionAt(point: ScreenPoint): string | undefined {
   return closestScreenPath(hitPaths, point.x, point.y, 14);
 }
 
-function onPointerMove(event: PointerEvent): void {
-  const id = findOptionAt(localPoint(event));
+function updateHover(point: ScreenPoint): void {
+  const id = findOptionAt(point);
   if (id !== hoverId.value) {
     hoverId.value = id;
     requestRender();
   }
-  if (canvas.value) canvas.value.style.cursor = id ? 'pointer' : 'default';
+  if (canvas.value) canvas.value.style.cursor = id ? 'pointer' : 'grab';
 }
 
-function onPointerLeave(): void {
+function onPointerDown(event: PointerEvent): void {
+  if (event.button !== 0 || !view) return;
+  try { canvas.value?.setPointerCapture(event.pointerId); } catch { /* Synthetic events and older browsers may not own the pointer. */ }
+  drag = { ...localPoint(event), start: { ...view }, moved: false };
   if (hoverId.value) {
     hoverId.value = undefined;
     requestRender();
   }
-  if (canvas.value) canvas.value.style.cursor = 'default';
+  if (canvas.value) canvas.value.style.cursor = 'grabbing';
 }
 
-function onClick(event: MouseEvent): void {
-  const id = findOptionAt(localPoint(event));
-  if (id) emit('select', id);
+function onPointerMove(event: PointerEvent): void {
+  if (drag) {
+    const point = localPoint(event);
+    const dx = point.x - drag.x;
+    const dy = point.y - drag.y;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.moved = true;
+    view = panViewBy(drag.start, dx, dy);
+    requestRender();
+    return;
+  }
+  updateHover(localPoint(event));
+}
+
+function finishPointer(event: PointerEvent, allowSelect: boolean): void {
+  if (!drag) return;
+  const point = localPoint(event);
+  const wasMoved = drag.moved;
+  drag = undefined;
+  try { canvas.value?.releasePointerCapture(event.pointerId); } catch { /* No captured pointer. */ }
+  const id = findOptionAt(point);
+  hoverId.value = id;
+  if (canvas.value) canvas.value.style.cursor = id ? 'pointer' : 'grab';
+  requestRender();
+  if (allowSelect && !wasMoved && id) emit('select', id);
+}
+
+function onPointerUp(event: PointerEvent): void {
+  finishPointer(event, true);
+}
+
+function onPointerCancel(event: PointerEvent): void {
+  finishPointer(event, false);
+}
+
+function onPointerLeave(): void {
+  if (drag) return;
+  if (hoverId.value) {
+    hoverId.value = undefined;
+    requestRender();
+  }
+  if (canvas.value) canvas.value.style.cursor = 'grab';
 }
 
 function onKeyDown(event: KeyboardEvent): void {
   if ((event.code === 'Enter' || event.code === 'Space') && hoverId.value) {
     event.preventDefault();
     emit('select', hoverId.value);
+  } else if (event.code === 'Equal' || event.code === 'NumpadAdd') {
+    event.preventDefault();
+    zoomButton(1.5);
+  } else if (event.code === 'Minus' || event.code === 'NumpadSubtract') {
+    event.preventDefault();
+    zoomButton(1 / 1.5);
+  } else if (event.code === 'Digit0' || event.code === 'Numpad0') {
+    event.preventDefault();
+    resetView();
   }
 }
 
 watch(() => props.selected, requestRender);
-watch(() => props.junction.nodeId, () => { hoverId.value = undefined; fit(); });
+watch(() => props.junction.nodeId, () => { hoverId.value = undefined; view = undefined; fit(); });
 watch(basemap, () => { tileState.value = 'loading'; requestRender(); });
 
 onMounted(() => {
@@ -297,38 +395,52 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="host" class="junction-map-host">
-    <canvas ref="canvas" class="junction-map-canvas" role="img" tabindex="0" aria-label="附近配线图。彩色线路为可选路径，点击线路或按回车选择。灰色线路为周边其它线路。" @pointermove="onPointerMove" @pointerleave="onPointerLeave" @click="onClick" @keydown="onKeyDown" />
+    <canvas ref="canvas" class="junction-map-canvas" role="img" tabindex="0" aria-label="附近配线图。点击线路选择走行路径；滚轮缩放，拖动平移，也可使用加号和减号按钮缩放。" @wheel.prevent="onWheel" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerCancel" @pointerleave="onPointerLeave" @keydown="onKeyDown" />
     <div class="junction-map-toolbar" aria-label="底图选择">
-      <span>底图</span>
-      <button :class="{ active: basemap === 'satellite' }" :aria-pressed="basemap === 'satellite'" @click="setBasemap('satellite')">卫星</button>
-      <button :class="{ active: basemap === 'street' }" :aria-pressed="basemap === 'street'" @click="setBasemap('street')">街道</button>
+      <span>高德底图</span>
+      <button :class="{ active: basemap === 'amap-satellite' }" :aria-pressed="basemap === 'amap-satellite'" @click="setBasemap('amap-satellite')">卫星</button>
+      <button :class="{ active: basemap === 'amap-street' }" :aria-pressed="basemap === 'amap-street'" @click="setBasemap('amap-street')">街道</button>
+    </div>
+    <div class="junction-map-zoom" aria-label="地图缩放">
+      <button aria-label="放大" title="放大" @click="zoomButton(1.5)">＋</button>
+      <button aria-label="缩小" title="缩小" @click="zoomButton(1 / 1.5)">−</button>
+      <button aria-label="复位视图" title="复位视图" @click="resetView">⤢</button>
     </div>
     <p v-if="basemapNotice" class="junction-map-notice" role="status">{{ basemapNotice }}</p>
     <p v-if="hoveredOption" class="junction-map-hover">
       点击选择 {{ String(junction.options.indexOf(hoveredOption) + 1).padStart(2, '0') }} · {{ hoveredOption.name }}
     </p>
-    <p class="junction-map-attribution">{{ provider.attribution }}</p>
+    <p v-else class="junction-map-pan-hint">滚轮缩放 · 拖动平移 · 点击线路选择</p>
+    <p class="junction-map-attribution">{{ provider.attribution }}{{ coordinateNotice }}</p>
     <p v-if="!optionCount" class="junction-map-notice error">没有可选线路</p>
   </div>
 </template>
 
 <style scoped>
 .junction-map-host { position: relative; flex: 1; min-height: 0; overflow: hidden; border: 1px solid rgba(255,255,255,.14); background: #0b120d; }
-.junction-map-canvas { display: block; width: 100%; height: 100%; outline: none; }
+.junction-map-canvas { display: block; width: 100%; height: 100%; outline: none; cursor: grab; touch-action: none; }
 .junction-map-canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
 .junction-map-toolbar { position: absolute; top: 12px; right: 12px; display: flex; align-items: center; gap: 3px; padding: 4px; border: 1px solid rgba(255,255,255,.16); background: rgba(8, 14, 9, .84); backdrop-filter: blur(8px); }
 .junction-map-toolbar span { padding: 0 5px; color: #8e9b89; font-size: 9px; letter-spacing: .5px; }
 .junction-map-toolbar button { min-height: 25px; padding: 0 8px; border: 1px solid transparent; color: #b8c4b2; background: transparent; font-size: 9px; }
 .junction-map-toolbar button:hover { color: #f1f7eb; border-color: rgba(255,255,255,.22); }
 .junction-map-toolbar button.active { border-color: var(--accent); color: #111710; background: var(--accent); }
+.junction-map-zoom { position: absolute; top: 54px; right: 12px; display: flex; flex-direction: column; border: 1px solid rgba(255,255,255,.16); background: rgba(8, 14, 9, .84); backdrop-filter: blur(8px); }
+.junction-map-zoom button { width: 30px; height: 28px; border: 0; border-bottom: 1px solid rgba(255,255,255,.1); color: #dbe5d5; background: transparent; font-size: 14px; line-height: 1; }
+.junction-map-zoom button:last-child { border-bottom: 0; font-size: 12px; }
+.junction-map-zoom button:hover { color: #111710; background: var(--accent); }
 .junction-map-notice { position: absolute; top: 12px; left: 50%; margin: 0; padding: 5px 9px; color: #d7e5cf; background: rgba(8, 14, 9, .84); border: 1px solid rgba(255,255,255,.13); font-size: 9px; transform: translateX(-50%); white-space: nowrap; pointer-events: none; }
 .junction-map-notice.error { color: #ffd0c5; border-color: #714a41; }
 .junction-map-hover { position: absolute; bottom: 13px; left: 50%; max-width: min(80%, 440px); margin: 0; padding: 6px 10px; overflow: hidden; color: #eff8e8; background: rgba(8, 14, 9, .92); border: 1px solid rgba(127, 221, 231, .45); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; transform: translateX(-50%); pointer-events: none; }
+.junction-map-pan-hint { position: absolute; bottom: 11px; left: 50%; margin: 0; padding: 4px 8px; color: rgba(229, 238, 222, .7); background: rgba(8, 14, 9, .7); font-size: 8.5px; transform: translateX(-50%); white-space: nowrap; pointer-events: none; }
 .junction-map-attribution { position: absolute; right: 9px; bottom: 7px; max-width: 62%; margin: 0; overflow: hidden; color: rgba(228, 238, 222, .62); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; text-align: right; pointer-events: none; }
 @media (max-width: 620px) {
   .junction-map-toolbar { top: 8px; right: 8px; }
   .junction-map-toolbar span { display: none; }
-  .junction-map-notice { top: 8px; left: 8px; max-width: calc(100% - 142px); overflow: hidden; text-overflow: ellipsis; transform: none; }
-  .junction-map-attribution { max-width: 56%; font-size: 7px; }
+  .junction-map-zoom { top: 48px; right: 8px; }
+  .junction-map-notice { top: 8px; left: 8px; max-width: calc(100% - 132px); overflow: hidden; text-overflow: ellipsis; transform: none; }
+  .junction-map-hover { bottom: 10px; max-width: calc(100% - 60px); }
+  .junction-map-pan-hint { display: none; }
+  .junction-map-attribution { max-width: 52%; font-size: 7px; }
 }
 </style>

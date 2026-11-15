@@ -3,9 +3,9 @@ import type { MapView } from './junctionMap';
 import { metresPerWorldUnit, tileZoomForScale } from '../utils/mercator';
 
 /**
- * Shared canvas layers for the 2D Web Mercator view in the junction prompt.
- * Railway geometry stays WGS84; the raster tiles
- * are standard EPSG:3857 and are only a visual reference.
+ * Shared canvas layers for the 2D Web Mercator views. Railway geometry remains
+ * WGS84 in data and topology; a caller drawing a GCJ-02 basemap must project
+ * display-only converted coordinates before passing its view here.
  */
 
 export type TileStatus = 'loading' | 'ready' | 'error';

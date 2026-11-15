@@ -2,9 +2,11 @@
 import { computed, onMounted, ref, shallowRef } from 'vue';
 import { neighboringProvinces } from '../../src/data/province-neighbors';
 import { RailwayRepository, type JsonFetcher } from '../../src/data/railway';
-import type { ProvinceInfo, RailSegment } from '../../src/types';
+import { StationRepository } from '../../src/data/stations';
+import type { ProvinceInfo, RailSegment, Station } from '../../src/types';
 import { analyzeProvince, type BreakGroup, type BreakKind, type ProvinceAnalysis } from './analysis';
-import type { BasemapId } from './basemap';
+import type { InspectorBasemap } from './basemap';
+import { STATION_MIN_TILE_ZOOM } from './stationLabels';
 import RailwayMap from './RailwayMap.vue';
 
 type Category = 'priority' | 'all' | 'filtered' | 'nearby' | 'isolated';
@@ -24,13 +26,18 @@ const selectedId = ref<string | null>(null);
 const showFiltered = ref(false);
 const showBridgeTunnel = ref(true);
 const showIsolated = ref(true);
-const basemap = ref<BasemapId>('street');
+const showStations = ref(true);
+const basemap = ref<InspectorBasemap>('amap-street');
+const stations = shallowRef<Station[]>([]);
+const stationError = ref('');
 const category = ref<Category>('priority');
 const query = ref('');
 const limit = ref(160);
 const sidebarOpen = ref(true);
 const mapRef = ref<MapHandle | null>(null);
 let repository: RailwayRepository | undefined;
+let stationRepository: StationRepository | undefined;
+let stationLoading: Promise<void> | undefined;
 let generation = 0;
 
 const fetchInspectorJson: JsonFetcher = async <T>(path: string): Promise<T> => {
@@ -93,6 +100,25 @@ async function ensureRepository(): Promise<void> {
   }
 }
 
+async function ensureStations(): Promise<void> {
+  if (stationRepository) return;
+  if (!stationLoading) {
+    stationLoading = (async () => {
+      try {
+        const loaded = new StationRepository(fetchInspectorJson);
+        await loaded.load();
+        stationRepository = loaded;
+        stations.value = loaded.stations;
+        stationError.value = '';
+      } catch (failure) {
+        stationError.value = failure instanceof Error ? `车站数据加载失败：${failure.message}` : '车站数据加载失败';
+      }
+    })();
+  }
+  await stationLoading;
+  if (!stationRepository) stationLoading = undefined;
+}
+
 async function load(): Promise<void> {
   if (loading.value) return;
   const current = ++generation;
@@ -105,6 +131,7 @@ async function load(): Promise<void> {
   contextSegments.value = [];
   try {
     await ensureRepository();
+    void ensureStations();
     const province = provinces.value.find(item => item.province === selectedProvince.value);
     if (!province || !repository) throw new Error('没有可用的省份线路索引');
     loadingMessage.value = `正在加载 ${province.province} 的国铁线路…`;
@@ -266,6 +293,10 @@ onMounted(async () => {
           <span v-if="provinceInfo">{{ provinceInfo.short_name }} · {{ provinceInfo.feature_count.toLocaleString() }} 原始要素</span>
           <span v-if="stats">已载入 {{ stats.loadedProvinces }} 省 / {{ stats.loadedSegments.toLocaleString() }} 区段</span>
         </div>
+        <div class="load-meta station-meta">
+          <span :class="{ 'station-error': !!stationError }">{{ stationError || (stations.length ? `全国有坐标车站 ${stations.length.toLocaleString()}` : '正在读取车站数据…') }}</span>
+          <span>缩放 ≥ {{ STATION_MIN_TILE_ZOOM }} 级显示站名</span>
+        </div>
       </section>
 
       <section v-if="stats" class="stats-grid" aria-label="诊断统计">
@@ -283,11 +314,10 @@ onMounted(async () => {
           <button title="适合省域" @click="mapRef?.fit()">⤢</button>
         </div>
         <div class="basemap-row">
-          <div class="basemap-caption"><span>地图底图</span><small>WGS84 / EPSG:3857 · 不做 GCJ-02 偏移</small></div>
+          <div class="basemap-caption"><span>地图底图</span><small>高德 GCJ-02 底图 · 线路 WGS84 配准</small></div>
           <div class="basemap-tabs" role="group" aria-label="地图底图">
-            <button :class="{ active: basemap === 'street' }" @click="basemap = 'street'">街道</button>
-            <button :class="{ active: basemap === 'satellite' }" @click="basemap = 'satellite'">卫星</button>
-            <button :class="{ active: basemap === 'none' }" @click="basemap = 'none'">无</button>
+            <button :class="{ active: basemap === 'amap-street' }" @click="basemap = 'amap-street'">高德普通</button>
+            <button :class="{ active: basemap === 'amap-satellite' }" @click="basemap = 'amap-satellite'">高德卫星</button>
           </div>
         </div>
         <div class="category-tabs" role="group" aria-label="断点筛选">
@@ -301,6 +331,7 @@ onMounted(async () => {
           <label><input v-model="showBridgeTunnel" type="checkbox" />桥隧着色</label>
           <label><input v-model="showIsolated" type="checkbox" />地图显示孤立</label>
           <label><input v-model="showFiltered" type="checkbox" />显示被过滤连接 ({{ filteredLinks.length }})</label>
+          <label><input v-model="showStations" type="checkbox" />车站标注（≥{{ STATION_MIN_TILE_ZOOM }} 级）</label>
         </div>
         <div class="list-meta"><span>{{ query ? '搜索结果' : '断点列表' }} · {{ matchingGroups.length.toLocaleString() }}</span><button :disabled="!stats" @click="exportReport">导出本省 JSON</button></div>
       </section>
@@ -338,6 +369,8 @@ onMounted(async () => {
         :show-bridge-tunnel="showBridgeTunnel"
         :show-isolated="showIsolated"
         :basemap="basemap"
+        :stations="stations"
+        :show-stations="showStations"
         @select="onMapSelect"
       />
       <button class="sidebar-toggle" @click="sidebarOpen = !sidebarOpen">{{ sidebarOpen ? '收起列表' : '展开列表' }}</button>
@@ -350,10 +383,11 @@ onMounted(async () => {
         <div><i class="dot filtered" />断点：存在被过滤连接</div>
         <div><i class="dot nearby" />断点：邻近线路未接入</div>
         <div><i class="dot isolated" />孤立端点</div>
+        <div><i class="dot station" />车站（缩放 ≥ {{ STATION_MIN_TILE_ZOOM }}）</div>
         <div><i class="line filtered-link" />被过滤的候选连接</div>
       </section>
 
-      <div class="map-note">桥隧只依据 OSM 标签识别，不是结构检测；断点是当前派生拓扑无可行驶出边的位置。</div>
+      <div class="map-note">底图/网格为高德 GCJ-02 显示坐标；线路、车站、断点详情保持 WGS84。放大到 ≥{{ STATION_MIN_TILE_ZOOM }} 级显示有坐标车站和站名；桥隧只依据 OSM 标签识别。</div>
 
       <div v-if="loading" class="check-loading"><span class="spinner" /><div><strong>正在准备线路检查</strong><span>{{ loadingMessage || '读取省份数据…' }}</span></div></div>
       <div v-if="error" class="check-error" role="alert">{{ error }}<button @click="error = ''">×</button></div>

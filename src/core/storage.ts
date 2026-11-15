@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS, type GameSettings } from '../config';
+import { isMapTileId } from '../map/basemap';
 import type { GameSave } from '../types';
 
 const DB_NAME = 'china-railway-train-sim';
@@ -92,7 +93,15 @@ export function validateGameSave(value: unknown): value is GameSave {
 
 export function loadSettings(): GameSettings {
   try {
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') } as GameSettings;
+    const stored: unknown = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}');
+    if (!stored || typeof stored !== 'object') return { ...DEFAULT_SETTINGS };
+    const values = stored as Partial<GameSettings>;
+    // Older settings have no mapTiles field and must start on the new AMap default.
+    return {
+      ...DEFAULT_SETTINGS,
+      ...values,
+      mapTiles: isMapTileId(values.mapTiles) ? values.mapTiles : DEFAULT_SETTINGS.mapTiles,
+    };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }

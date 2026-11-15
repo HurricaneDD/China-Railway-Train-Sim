@@ -85,7 +85,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
             <span><i class="legend-node" />车站</span>
             <span><i class="legend-arrow">↑</i>运行方向</span>
           </div>
-          <p class="departure-caption">底图仅作地理参考；线路来自 OSM 国铁几何，不表示真实站场、线路占用或信号。数据无法判定上下行，方向只按地理方位显示。</p>
+          <p class="departure-caption">高德底图使用 GCJ-02；线路只在显示层转换为 GCJ-02 配准，区段、车站和存档仍为 WGS84。底图仅作地理参考，不表示真实站场、线路占用或信号；数据无法判定上下行，方向只按地理方位显示。</p>
         </section>
 
         <aside class="departure-choice-panel" aria-label="始发线路与方向">

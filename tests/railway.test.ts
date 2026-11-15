@@ -160,6 +160,44 @@ describe('原始共享顶点接续（不切分或改写原始区段）', () => {
     }
   });
 
+  it('多省加载后首次查询只按需计算当前区段边界', async () => {
+    const a = { ...province, adcode: '320000' }, b = { ...province, adcode: '340000', province: '安徽省' };
+    vi.mocked(fetchJson).mockResolvedValue({ type: 'FeatureCollection', features: [
+      feature('main', [[118, 32], [118.001, 32], [118.002, 32]]),
+    ] });
+    const network = new RailNetwork();
+    await network.loadProvince(a);
+    // A second, spatially unrelated province invalidates the lazy caches but must not
+    // force their rebuild until the train asks about a specific segment or node.
+    vi.mocked(fetchJson).mockResolvedValue({ type: 'FeatureCollection', features: [
+      feature('far-a', [[120, 33], [120.001, 33]]),
+      feature('far-b', [[121, 34], [121.001, 34]]),
+    ] });
+    await network.loadProvince(b);
+    const segment = network.segments.get('320000:0:0')!;
+    network.nextBoundary(segment.id, 0, 1);
+    const cache = network as unknown as { boundaries: Map<string, unknown>; nodeExits: Map<string, unknown> };
+    expect(cache.boundaries.size).toBe(1);
+    expect(cache.nodeExits.size).toBe(0);
+  });
+
+  it('按需计算节点出口时能发现尚未查询过的主线内部顶点', async () => {
+    vi.mocked(fetchJson).mockResolvedValue({ type: 'FeatureCollection', features: [
+      feature('main', [[118, 32], [118.001, 32], [118.002, 32]]),
+      feature('branch', [[118.001, 31.999], [118.001, 32]]),
+    ] });
+    const network = new RailNetwork();
+    await network.loadProvince(province);
+    // Query the branch first: main's interior boundary has not been cached yet.
+    const boundary = network.nextBoundary('320000:1:0', 0, 1)!;
+    expect(network.exitsAt('320000:1:0', boundary, 1).map(exit => [exit.segmentId, exit.direction])).toEqual([
+      ['320000:0:0', -1], ['320000:0:0', 1],
+    ]);
+    const cache = network as unknown as { boundaries: Map<string, unknown> };
+    expect(cache.boundaries.has('320000:0:0')).toBe(true);
+  });
+
+
   it('同一原始闭合折线可以从末端接回自身起点', async () => {
     vi.mocked(fetchJson).mockResolvedValue({ type: 'FeatureCollection', features: [feature('loop', [[118, 32], [118.001, 32], [118.001, 32.001], [118, 32]])] });
     const network = new RailNetwork();

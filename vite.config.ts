@@ -54,6 +54,8 @@ function railwayData(): Plugin {
         await cp(resolve(__dirname, 'data', file), target, { recursive: true });
       }
       await cp(resolve(__dirname, 'data/README.md'), resolve(__dirname, 'dist/data/README.md'));
+      // Landing-page background slides are static media, not provincial railway data.
+      await cp(resolve(__dirname, 'media'), resolve(__dirname, 'dist/media'), { recursive: true });
       await writeFile(resolve(__dirname, 'dist/.nojekyll'), '');
     },
   };
