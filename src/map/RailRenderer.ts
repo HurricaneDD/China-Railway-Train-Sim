@@ -6,7 +6,7 @@ import {
 import { APP_CONFIG } from '../config';
 import type { ElevationService } from '../core/elevation';
 import type { LonLat, RailSegment } from '../types';
-import { distance, nearestOnSegment, offsetPoint, pointAt } from '../utils/geo';
+import { offsetPoint, pointAt } from '../utils/geo';
 
 export class RailRenderer {
   private primitives: Primitive[] = [];
@@ -36,7 +36,6 @@ export class RailRenderer {
     if (!available.length) throw new Error('轨道高程尚未加载，请重试地图服务');
     const rails: GeometryInstance[] = [];
     const ballast: GeometryInstance[] = [];
-    const sleeperCandidates: Array<{ point: LonLat & { heading: number }; height: number; distance: number }> = [];
 
     for (const segment of available) {
       const centerHeights = segment.points.map(point => this.elevation.height(point) + APP_CONFIG.track.heightOffset);
@@ -45,38 +44,13 @@ export class RailRenderer {
         const shifted = offsetPoint(point, headings[index], side * APP_CONFIG.track.gauge / 2);
         return Cartesian3.fromDegrees(shifted.lon, shifted.lat, centerHeights[index]);
       }));
-      sides.forEach(positions => rails.push(this.polyline(positions, 2.2, Color.fromCssColorString('#cdd3ce'))));
+      sides.forEach(positions => rails.push(this.polyline(positions, 1.1, Color.fromCssColorString('#828d86'))));
       ballast.push(this.ballastRibbon(segment, headings, centerHeights));
-      // Dense sleepers only near the cab. Select nearest sleepers globally rather than exhausting
-      // the budget on the first yard track in the source file.
-      const nearest = focus ? nearestOnSegment(segment, focus) : null;
-      if (nearest && nearest.distance > 1400) continue;
-      const near = !focus || (nearest && nearest.distance < 650);
-      const spacing = near ? 0.85 : APP_CONFIG.track.sleeperSpacing;
-      const startOffset = nearest ? Math.max(0, nearest.offset - 1600) : 0;
-      const endOffset = nearest ? Math.min(segment.length, nearest.offset + 1600) : segment.length;
-      for (let offset = Math.ceil(startOffset / spacing) * spacing; offset < endOffset; offset += spacing) {
-        const center = pointAt(segment, offset);
-        const d = focus ? distance(center, focus) : offset;
-        if (focus && d > 1400) continue;
-        const upper = segment.cumulative.findIndex(value => value >= offset);
-        const index = Math.min(segment.points.length - 1, Math.max(1, upper));
-        const span = segment.cumulative[index] - segment.cumulative[index - 1];
-        const fraction = span > 0 ? (offset - segment.cumulative[index - 1]) / span : 0;
-        const height = centerHeights[index - 1] + (centerHeights[index] - centerHeights[index - 1]) * fraction;
-        sleeperCandidates.push({ point: center, height, distance: d });
-      }
     }
-    const sleepers = sleeperCandidates.sort((a, b) => a.distance - b.distance).slice(0, 1800).map(({ point, height }) => {
-      const left = offsetPoint(point, point.heading, -APP_CONFIG.track.sleeperLength / 2);
-      const right = offsetPoint(point, point.heading, APP_CONFIG.track.sleeperLength / 2);
-      return this.polyline([Cartesian3.fromDegrees(left.lon, left.lat, height), Cartesian3.fromDegrees(right.lon, right.lat, height)], 3.2, Color.fromCssColorString('#615c50'));
-    });
     if (generation !== this.generation) return;
     const next = [
       this.createPrimitive(ballast, true),
       this.createPrimitive(rails),
-      this.createPrimitive(sleepers),
     ].filter((primitive): primitive is Primitive => !!primitive);
     next.forEach(primitive => { this.viewer.scene.primitives.add(primitive); this.staged.add(primitive); });
     const ready = await this.waitUntilReady(next, generation);
@@ -108,7 +82,7 @@ export class RailRenderer {
     segment.points.forEach((point, index) => {
       for (const side of [-1, 1]) {
         const p = offsetPoint(point, headings[index], side * 2.1);
-        const cartesian = Cartesian3.fromDegrees(p.lon, p.lat, heights[index] - 0.08);
+        const cartesian = Cartesian3.fromDegrees(p.lon, p.lat, heights[index] - 0.4);
         positions.push(cartesian.x, cartesian.y, cartesian.z);
       }
     });

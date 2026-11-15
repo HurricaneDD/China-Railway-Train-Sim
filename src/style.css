@@ -119,10 +119,15 @@ select { min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-
 @keyframes pulse { 50% { opacity: .3; } }
 
 /* ---------- Driving interface: macOS-like top menu, left control column, journey bar ---------- */
-.driving-ui {
+.app-shell, .driving-ui {
   --hud-menubar: 48px;
   --hud-sidebar: 336px;
   --hud-statusbar: 58px;
+}
+/* Render into the actual driving window: menus and the desk must not crop a full-screen lens. */
+.is-driving .map-canvas { top: var(--hud-menubar); right: 0; bottom: var(--hud-statusbar); left: var(--hud-sidebar); }
+.is-driving.is-cab .map-canvas { top: calc(var(--hud-menubar) + 24px); bottom: calc(var(--hud-statusbar) + 150px); }
+.driving-ui {
   position: fixed;
   inset: 0;
   z-index: 2;
@@ -371,13 +376,13 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
 
 /* HUD breakpoints */
 @media (max-width: 1180px) {
-  .driving-ui { --hud-sidebar: 304px; }
+  .app-shell, .driving-ui { --hud-sidebar: 304px; }
   .menubar-sub { max-width: 190px; }
   .practice-chip { display: none; }
   .menubar-status { gap: 9px; }
 }
 @media (max-width: 960px) {
-  .driving-ui { --hud-sidebar: 286px; }
+  .app-shell, .driving-ui { --hud-sidebar: 286px; }
   .menubar-title { display: none; }
   .menubar-brand { padding-right: 10px; margin-right: 2px; }
   .menubar-action, .menubar-item { padding: 0 10px; font-size: 11px; }
@@ -388,7 +393,7 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
   .status-field strong { font-size: 11px; }
 }
 @media (max-width: 820px) {
-  .driving-ui { --hud-sidebar: 0px; --hud-statusbar: 54px; }
+  .app-shell, .driving-ui { --hud-sidebar: 0px; --hud-statusbar: 54px; }
   .drive-display, .drive-statusbar { left: 0; }
   .drive-sidebar { position: fixed; z-index: 9; top: var(--hud-menubar); bottom: var(--hud-statusbar); left: 0; width: min(340px, 92vw); transform: translateX(-102%); transition: transform .22s ease; box-shadow: 18px 0 60px rgba(0, 0, 0, .55); }
   .driving-ui.controls-open .drive-sidebar { transform: translateX(0); }
@@ -400,7 +405,8 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
   .camera-hint { right: 12px; bottom: 12px; }
 }
 @media (max-width: 640px) {
-  .driving-ui { --hud-menubar: 44px; --hud-statusbar: 50px; }
+  .app-shell, .driving-ui { --hud-menubar: 44px; --hud-statusbar: 50px; }
+  .is-driving.is-cab .map-canvas { bottom: calc(var(--hud-statusbar) + 110px); }
   .drive-menubar { padding: 0 4px; }
   .menubar-brand { gap: 6px; padding-right: 6px; }
   .menubar-brand .brand-mark.small { width: 26px; height: 26px; font-size: 13px; }

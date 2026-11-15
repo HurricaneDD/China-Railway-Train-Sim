@@ -8,9 +8,10 @@ import { APP_CONFIG } from '../config';
 import type { GameSession } from '../core/session';
 import type { CameraMode, LonLat, RailSegment, Station } from '../types';
 import { BASEMAPS, DEFAULT_MAP_TILES, type MapTileId } from './basemap';
-import { fixedCameraFov, fixedCameraPose } from './cameraPose';
+import { cabCameraFov, cabCameraPose, fixedCameraFov, fixedCameraPose } from './cameraPose';
 import { createGcj02ImageryProvider } from './gcj02ImageryProvider';
 import { RailRenderer } from './RailRenderer';
+import { SceneryManager } from './SceneryManager';
 import { StationLabelRenderer } from './StationLabelRenderer';
 import { TrainRenderer } from './TrainRenderer';
 import { offsetPoint } from '../utils/geo';
@@ -30,6 +31,8 @@ export class CesiumMap {
   private tileGeneration = 0;
   private tileLoadFailed = false;
   private railRenderer!: RailRenderer;
+  private scenery!: SceneryManager;
+  private sceneryCheckTime = 0;
   private provinceRailway?: GroundPolylinePrimitive;
   private trainRenderer!: TrainRenderer;
   private stationLabels!: StationLabelRenderer;
@@ -76,6 +79,7 @@ export class CesiumMap {
     if (initialFrustum instanceof PerspectiveFrustum) this.defaultFov = (initialFrustum as PerspectiveFrustum).fov ?? this.defaultFov;
     this.viewer.cesiumWidget.creditContainer.setAttribute('style', 'font-size:10px;opacity:.65');
     this.railRenderer = new RailRenderer(this.viewer, this.session!.elevation);
+    this.scenery = new SceneryManager(this.viewer, this.session!.elevation);
     this.trainRenderer = new TrainRenderer(this.viewer);
     this.stationLabels = new StationLabelRenderer(this.viewer);
     // Apply the selected raster source before the first visible frame; AMap
@@ -231,6 +235,7 @@ export class CesiumMap {
   // Overview uses the original WGS84 vertices, with no straight-line joins between parts.
   showProvinceRailway(segments: RailSegment[]): void {
     this.clearProvinceRailway();
+    this.scenery.clear();
     this.railRenderer.clear();
     if (!segments.length) return;
     let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity;
@@ -262,6 +267,7 @@ export class CesiumMap {
 
   clearRailway(): void {
     this.clearProvinceRailway();
+    this.scenery.clear();
     this.railRenderer.clear();
   }
 
@@ -311,6 +317,7 @@ export class CesiumMap {
     if (this.viewer && !this.viewer.isDestroyed()) {
       this.stationLabels?.clear();
       this.railRenderer?.clear();
+      this.scenery?.clear();
       this.clearProvinceRailway();
     }
     this.handler?.destroy();
@@ -346,6 +353,15 @@ export class CesiumMap {
     if (this.session?.running) {
       const points = this.session.consistPoints();
       stationCenter = points[0];
+      if (stationCenter && now - this.sceneryCheckTime >= 250) {
+        this.sceneryCheckTime = now;
+        const network = this.session.railway.network;
+        const preferred = this.session.position?.segmentId;
+        if (this.scenery.needsUpdate(stationCenter, preferred, network.segments.size, now)) {
+          const segments = network.segmentsNear(stationCenter, APP_CONFIG.scenery.radius + APP_CONFIG.scenery.chunkLength, 120, preferred);
+          void this.scenery.update(segments, stationCenter, preferred, network.segments.size);
+        }
+      }
       const inCab = this.cameraMode === 'cab';
       // 只有“第三人称自由”允许玩家旋转/缩放；固定视角和驾驶室每帧重置相机。
       this.viewer.scene.screenSpaceCameraController.enableInputs = this.cameraMode === 'free';
@@ -375,13 +391,13 @@ export class CesiumMap {
       const difference = Math.atan2(Math.sin(desired - this.cabHeading), Math.cos(desired - this.cabHeading));
       this.cabHeading += difference * (1 - Math.exp(-APP_CONFIG.camera.cabHeadingSmoothing * dt));
     }
-    // Place the eye near the front of the locomotive, looking down the track.
-    const eye = offsetPoint({ lon, lat }, heading - 90, APP_CONFIG.camera.cabForwardOffset);
-    const ground = this.viewer.scene.globe.getHeight(Cartographic.fromDegrees(eye.lon, eye.lat));
+    const eye = cabCameraPose({ lon, lat, height }, heading, this.session?.train.slope ?? 0);
+    const canvas = this.viewer.scene.canvas;
+    this.applyFov(cabCameraFov(canvas.clientWidth, canvas.clientHeight));
     this.viewer.camera.lookAtTransform(Matrix4.IDENTITY);
     this.viewer.camera.setView({
-      destination: Cartesian3.fromDegrees(eye.lon, eye.lat, Math.max(height, ground ?? height) + APP_CONFIG.track.heightOffset + APP_CONFIG.camera.cabEyeHeight),
-      orientation: { heading: this.cabHeading, pitch: APP_CONFIG.camera.cabPitch, roll: 0 },
+      destination: Cartesian3.fromDegrees(eye.lon, eye.lat, eye.altitude),
+      orientation: { heading: this.cabHeading, pitch: eye.pitch, roll: 0 },
     });
   }
 

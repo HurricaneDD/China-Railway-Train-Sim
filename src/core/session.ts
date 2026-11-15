@@ -6,6 +6,7 @@ import type { GameSave, JunctionOption, JunctionRequest, LonLat, Reverser, Route
 import { bearing, compassDirection, distance, pointAt } from '../utils/geo';
 import { initialTrainState, stepDynamics } from './dynamics';
 import { ElevationService } from './elevation';
+import { railProfilePoints } from './trackProfile';
 import { saveStore } from './storage';
 
 export class GameSession {
@@ -251,7 +252,7 @@ export class GameSession {
     if (!segment) return;
     const point = pointAt(segment, this.position.offset);
     return { ...point, heading: (point.heading + (this.position.direction < 0 ? 180 : 0)) % 360,
-      height: this.elevation.height(point), travelled: this.routeCoordinate };
+      height: this.elevation.railHeight(segment, this.position.offset) ?? this.elevation.height(point), travelled: this.routeCoordinate };
   }
 
   consistPoints(): RoutePoint[] {
@@ -489,7 +490,7 @@ export class GameSession {
     while (distanceLeft > 0 && guard++ < 5000) {
       const point = pointAt(segment, offset);
       if (coordinate < oldest) points.push({ ...point, heading: (point.heading + (direction < 0 ? 180 : 0)) % 360,
-        height: this.elevation.height(point), travelled: coordinate });
+        height: this.elevation.railHeight(segment, offset) ?? this.elevation.height(point), travelled: coordinate });
       const boundary = this.railway.network.nextBoundary(segment.id, offset, -direction);
       if (!boundary) break;
       const available = Math.abs(offset - boundary.offset);
@@ -510,7 +511,7 @@ export class GameSession {
       if (!next) break;
       const corner = pointAt(segment, offset);
       if (coordinate < oldest) points.push({ ...corner, heading: (corner.heading + (direction < 0 ? 180 : 0)) % 360,
-        height: this.elevation.height(corner), travelled: coordinate });
+        height: this.elevation.railHeight(segment, offset) ?? this.elevation.height(corner), travelled: coordinate });
       direction = -next.direction as 1 | -1;
       segment = this.railway.network.segments.get(next.segmentId)!;
       offset = next.offset;
@@ -580,18 +581,29 @@ export class GameSession {
     const generation = ++this.slopeGeneration;
     const direction = this.position.direction;
     const span = Math.min(150, segment.length / 2);
-    const center = pointAt(segment, this.position.offset);
     const aheadOffset = Math.max(0, Math.min(segment.length, this.position.offset + span * direction));
     const behindOffset = Math.max(0, Math.min(segment.length, this.position.offset - span * direction));
-    const ahead = pointAt(segment, aheadOffset), behind = pointAt(segment, behindOffset);
-    // Physical slope always uses the locomotive's body-forward axis, including while reversing.
-    const slope = await this.elevation.slope(center, ahead, behind, Math.abs(aheadOffset - behindOffset));
+    await this.elevation.sample(railProfilePoints(segment, Math.min(aheadOffset, behindOffset), Math.max(aheadOffset, behindOffset)));
     if (generation !== this.slopeGeneration) return;
+    const ahead = this.elevation.railHeight(segment, aheadOffset);
+    const behind = this.elevation.railHeight(segment, behindOffset);
+    // Same original-vertex profile as the rail mesh; unknown samples retain the previous grade.
+    const slope = ahead !== undefined && behind !== undefined && aheadOffset !== behindOffset
+      ? (ahead - behind) / Math.abs(aheadOffset - behindOffset) : undefined;
     const visibleHistory = this.history.filter(point => Math.abs(point.travelled - this.routeCoordinate) < 180);
-    const heights = await this.elevation.sample(visibleHistory);
+    const locations = visibleHistory.map(point => this.railway.network.nearest(point, 2));
+    await this.elevation.sample(locations.flatMap(location => {
+      const track = location && this.railway.network.segments.get(location.segmentId);
+      return track && location ? railProfilePoints(track, location.offset, location.offset) : [];
+    }));
     if (generation !== this.slopeGeneration) return;
-    visibleHistory.forEach((point, index) => { point.height = heights[index]; });
-    if (this.position?.segmentId === segment.id) this.train.slope = slope;
+    visibleHistory.forEach((point, index) => {
+      const location = locations[index];
+      const track = location && this.railway.network.segments.get(location.segmentId);
+      const height = track && location ? this.elevation.railHeight(track, location.offset) : undefined;
+      if (height !== undefined) point.height = height;
+    });
+    if (this.position?.segmentId === segment.id && slope !== undefined) this.train.slope = slope;
   }
 
   async retryBorder(): Promise<void> {

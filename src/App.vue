@@ -224,6 +224,7 @@ async function departFromStation(payload: { line: StationDepartureLine; directio
 }
 
 async function beginDriving(point: LonLat): Promise<void> {
+  setCameraMode('cab');
   userPaused.value = false;
   showHelp.value = true;
   screen.value = 'driving';
@@ -422,7 +423,7 @@ async function retryData(): Promise<void> {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'is-driving': screen === 'driving' }">
+  <div class="app-shell" :class="{ 'is-driving': screen === 'driving', 'is-cab': cameraMode === 'cab' }">
     <!-- Cesium stays mounted behind the landing page so imagery and terrain keep loading. -->
     <MapView :session="session" :hide-loading-status="screen === 'menu'" :map-tiles="settings.mapTiles" @ready="map = $event; mapReady = true" @status="mapStatus = $event" @error="notify($event, true); userPaused = true" />
     <div v-if="screen === 'new'" class="map-shade" />

@@ -47,6 +47,15 @@ export const APP_CONFIG = {
     heightOffset: 1.2,
     elevationSampleSpacing: 120,
   },
+  scenery: {
+    chunkLength: 250,
+    radius: 1100,
+    refreshDistance: 120,
+    maxChunks: 48,
+    sleeperSpacing: 0.72,
+    sampleSpacing: 8,
+    retryMs: 5000,
+  },
   train: {
     locomotive: { length: 20, width: 3.3, height: 4.7, mass: 138_000 },
     cars: [
@@ -92,7 +101,9 @@ export const APP_CONFIG = {
   camera: {
     cabEyeHeight: 2.2,
     cabForwardOffset: 7,
-    cabPitch: -0.12,
+    cabPitch: -0.025,
+    cabHorizontalFovDegrees: 58,
+    cabMaxVerticalFovDegrees: 55,
     cabHeadingSmoothing: 6,
     heading: 0,
     pitch: -0.42,

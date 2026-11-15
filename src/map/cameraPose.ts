@@ -10,6 +10,26 @@ export interface FixedCameraPose {
   pitch: number;
 }
 
+/** Driver's eye follows the rail profile, never the terrain's highest visible surface. */
+export function cabCameraPose(head: LonLat & { height: number }, heading: number, grade: number): FixedCameraPose {
+  const forward = APP_CONFIG.camera.cabForwardOffset;
+  const slope = Number.isFinite(grade) ? grade : 0;
+  const eye = offsetPoint(head, heading - 90, forward);
+  return { ...eye, heading,
+    altitude: head.height + APP_CONFIG.track.heightOffset + APP_CONFIG.camera.cabEyeHeight + slope * forward,
+    pitch: Math.atan(slope) + APP_CONFIG.camera.cabPitch,
+  };
+}
+
+/** Preserve a natural forward lens without a portrait-screen vertical fisheye. */
+export function cabCameraFov(width: number, height: number): number {
+  const aspect = width / Math.max(1, height);
+  const horizontal = APP_CONFIG.camera.cabHorizontalFovDegrees * Math.PI / 180;
+  const maxVertical = APP_CONFIG.camera.cabMaxVerticalFovDegrees * Math.PI / 180;
+  const vertical = Math.min(maxVertical, 2 * Math.atan(Math.tan(horizontal / 2) / Math.max(0.1, aspect)));
+  return horizontalFovForVertical(vertical, aspect);
+}
+
 /**
  * 计算“第三人称固定”视角的相机位置与朝向。
  *

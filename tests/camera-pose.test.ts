@@ -1,7 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { APP_CONFIG } from '../src/config';
-import { fixedCameraFov, fixedCameraPose, horizontalFovForVertical } from '../src/map/cameraPose';
+import { cabCameraFov, cabCameraPose, fixedCameraFov, fixedCameraPose, horizontalFovForVertical } from '../src/map/cameraPose';
 import { bearing, distance } from '../src/utils/geo';
+
+describe('驾驶室沿轨平视', () => {
+  const head = { lon: 118.8, lat: 32, height: 42 };
+  it('眼点在车头前方，轨面上2.2米，平路仅轻微向下看', () => {
+    const pose = cabCameraPose(head, 90, 0);
+    expect(bearing(head, pose)).toBeCloseTo(90, 2);
+    expect(distance(head, pose)).toBeCloseTo(7, 1);
+    expect(pose.altitude - head.height - APP_CONFIG.track.heightOffset).toBeCloseTo(2.2);
+    expect(pose.pitch * 180 / Math.PI).toBeGreaterThan(-2);
+    expect(pose.pitch).toBeLessThan(0);
+  });
+  it('坡道时眼点和视线都沿车体前向的轨面变化', () => {
+    const pose = cabCameraPose(head, 90, 0.03);
+    expect(pose.altitude).toBeCloseTo(cabCameraPose(head, 90, 0).altitude + 7 * 0.03);
+    expect(pose.pitch).toBeCloseTo(Math.atan(0.03) + APP_CONFIG.camera.cabPitch);
+  });
+  it('宽屏保持58度横向取景，竖屏竖直视场不超过55度', () => {
+    expect(cabCameraFov(1104, 610) * 180 / Math.PI).toBeCloseTo(58);
+    expect(cabCameraFov(390, 616) * 180 / Math.PI).toBeCloseTo(55);
+  });
+});
 
 describe('第三人称固定视角', () => {
   const head = { lon: 118.8, lat: 32, height: 42 };
