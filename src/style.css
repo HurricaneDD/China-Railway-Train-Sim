@@ -247,7 +247,7 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
 .utility-button.sanding { color: var(--accent); border-color: var(--accent); }
 
 /* Bottom journey bar */
-.drive-statusbar { position: absolute; right: 0; bottom: 0; left: var(--hud-sidebar); z-index: 5; display: grid; grid-template-columns: .8fr .8fr 1fr 1.35fr 1.3fr; align-items: stretch; height: var(--hud-statusbar); border-top: 1px solid rgba(255, 255, 255, .14); background: linear-gradient(180deg, rgba(15, 18, 15, .93), rgba(10, 13, 10, .97)); backdrop-filter: blur(16px); pointer-events: auto; }
+.drive-statusbar { position: absolute; right: 0; bottom: 0; left: var(--hud-sidebar); z-index: 5; display: grid; grid-template-columns: .65fr .65fr .8fr 1fr 1.45fr 1.45fr; align-items: stretch; height: var(--hud-statusbar); border-top: 1px solid rgba(255, 255, 255, .14); background: linear-gradient(180deg, rgba(15, 18, 15, .93), rgba(10, 13, 10, .97)); backdrop-filter: blur(16px); pointer-events: auto; }
 .status-field { display: flex; flex-direction: column; justify-content: center; gap: 3px; min-width: 0; padding: 0 15px; border-right: 1px solid rgba(255, 255, 255, .08); }
 .status-field:last-child { border-right: 0; }
 .status-field span { color: var(--muted); font-size: 8px; letter-spacing: 1.2px; }
@@ -393,7 +393,7 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
   .camera-hint { right: 12px; bottom: 12px; }
 }
 @media (max-width: 640px) {
-  .app-shell, .driving-ui { --hud-menubar: 44px; --hud-statusbar: 50px; }
+  .app-shell, .driving-ui { --hud-menubar: 44px; --hud-statusbar: 84px; }
   .drive-menubar { padding: 0 4px; }
   .menubar-brand { gap: 6px; padding-right: 6px; }
   .menubar-brand .brand-mark.small { width: 26px; height: 26px; font-size: 13px; }
@@ -405,6 +405,7 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
   .route-status { top: 8px; max-width: calc(100% - 126px); padding: 7px 9px; font-size: 10px; }
   .route-status button { display: block; margin: 4px auto 0; }
   .camera-hint { display: none; }
+  .drive-statusbar { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(2, 1fr); }
   .status-field { gap: 2px; padding: 0 7px; }
   .status-field span { font-size: 7px; letter-spacing: .2px; }
   .status-field strong { font-size: 9.5px; }
@@ -413,7 +414,6 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
 }
 @media (max-width: 480px) {
   .menubar-brand { display: none; }
-  .drive-statusbar { grid-template-columns: .8fr .8fr 1fr 1.15fr 1.3fr; }
   .brake-footer { flex-wrap: wrap; }
 }
 
@@ -500,3 +500,7 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
   .bearing-arrow { display: none; }
   .option-title { align-items: flex-start; }
 }
+
+.status-field .station-distance { display: flex; gap: 6px; align-items: baseline; }
+.station-distance em { overflow: hidden; text-overflow: ellipsis; font-style: normal; }
+.station-distance i { flex-shrink: 0; }

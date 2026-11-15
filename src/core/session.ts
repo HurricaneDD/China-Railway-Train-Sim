@@ -4,16 +4,18 @@ import { StationRepository } from '../data/stations';
 import { neighboringProvinces } from '../data/province-neighbors';
 import type { GameSave, JunctionOption, JunctionRequest, LonLat, Reverser, RoutePoint, SavePosition, SnapResult, TrainState } from '../types';
 import { bearing, compassDirection, distance, pointAt } from '../utils/geo';
-import { initialTrainState, stepDynamics } from './dynamics';
+import { initialSteepGradeAssistState, initialTrainState, stepDynamics } from './dynamics';
 import { ElevationService } from './elevation';
 import { railProfilePoints } from './trackProfile';
 import { saveStore } from './storage';
+import { directionalNearestStations, type DirectionalStations } from './nearbyStations';
 
 export class GameSession {
   readonly railway = new RailwayRepository();
   readonly stations = new StationRepository();
   readonly elevation = new ElevationService();
   train: TrainState = initialTrainState();
+  steepGradeAssist = initialSteepGradeAssistState();
   position?: SavePosition;
   junction?: JunctionRequest;
   junctionDistance = Infinity;
@@ -47,6 +49,9 @@ export class GameSession {
   private borderTimer = 0;
   private autosaveTimer = 0;
   private repeatTimer = 0;
+  private stationCache: DirectionalStations = {};
+  private stationCacheTime = -Infinity;
+  private lastMotionSign = 1;
   private heldThrottle = new Set<'up' | 'down'>();
 
   async initialize(): Promise<void> {
@@ -75,6 +80,7 @@ export class GameSession {
     if (!segment) throw new Error('出发区段不存在');
     this.position = { province: segment.properties.province, segmentId, offset, direction, travelled: 0 };
     this.train = initialTrainState();
+    this.steepGradeAssist = initialSteepGradeAssistState();
     this.train.brakeCommand = this.train.brakeActual = 100;
     this.train.brakePipe = 430;
     this.parkingBrake = true;
@@ -82,6 +88,9 @@ export class GameSession {
     this.routeEnd = false;
     this.practiceComplete = false;
     this.tripGeneration++;
+    this.stationCacheTime = -Infinity;
+    this.stationCache = {};
+    this.lastMotionSign = Math.sign(this.train.velocity) || this.train.reverser || 1;
     this.loadingBorder = false;
     this.borderLoading = undefined;
     this.lastBorderCheck = undefined;
@@ -110,11 +119,15 @@ export class GameSession {
     if (!segment) throw new Error('存档中的铁路区段不存在，可能线路数据已更新');
     this.position = { ...save.position, offset: Math.max(0, Math.min(segment.length, save.position.offset)) };
     this.train = { ...initialTrainState(), ...save.train };
+    this.steepGradeAssist = initialSteepGradeAssistState();
     this.parkingBrake = Math.abs(this.train.velocity) < 0.001 && this.train.brakeActual >= 99;
     this.routeCoordinate = save.position.travelled;
     this.routeEnd = false;
     this.practiceComplete = false;
     this.tripGeneration++;
+    this.stationCacheTime = -Infinity;
+    this.stationCache = {};
+    this.lastMotionSign = Math.sign(this.train.velocity) || this.train.reverser || 1;
     this.loadingBorder = false;
     this.borderLoading = undefined;
     this.lastBorderCheck = undefined;
@@ -192,12 +205,16 @@ export class GameSession {
     return sign * this.position.direction > 0 ? segment.length - this.position.offset : this.position.offset;
   }
 
-  get nearestStation(): { name: string; distance: number } | undefined {
+  /** Cached by real time, independent of simulation speed and HUD render rate. */
+  get nearbyStations(): DirectionalStations {
+    const now = performance.now();
+    if (now - this.stationCacheTime < 1000) return this.stationCache;
     const point = this.currentPoint();
-    if (!point) return;
-    const station = this.stations.nearest(point);
-    if (!station) return;
-    return { name: station.name, distance: distance(point, { lon: station.longitude, lat: station.latitude }) };
+    if (!point) return {};
+    this.stationCache = directionalNearestStations(this.stations.stations, point,
+      point.heading + (this.lastMotionSign < 0 ? 180 : 0));
+    this.stationCacheTime = now;
+    return this.stationCache;
   }
 
   setThrottle(value: number): void {
@@ -211,8 +228,11 @@ export class GameSession {
 
   setReverser(value: Reverser): boolean {
     if (Math.abs(this.train.velocity) * 3.6 > APP_CONFIG.train.reverseThresholdKmh) return false;
+    if (value !== this.train.reverser) this.steepGradeAssist = initialSteepGradeAssistState();
     this.train.reverser = value;
     this.train.velocity = 0;
+    if (value) this.lastMotionSign = value;
+    this.stationCacheTime = -Infinity;
     this.preferredNext = undefined;
     this.routeEnd = false;
     this.junction = undefined;
@@ -272,6 +292,9 @@ export class GameSession {
   stop(): void {
     this.running = false;
     this.tripGeneration++;
+    this.stationCacheTime = -Infinity;
+    this.stationCache = {};
+    this.lastMotionSign = Math.sign(this.train.velocity) || this.train.reverser || 1;
     this.loadingBorder = false;
     cancelAnimationFrame(this.animationFrame);
     this.clearControls();
@@ -315,7 +338,8 @@ export class GameSession {
       if (direction) this.setThrottle(this.train.throttle + direction * APP_CONFIG.train.throttleStep);
       this.repeatTimer = 0;
     }
-    stepDynamics(this.train, dt, this.train.slope, this.brakeHeld || this.parkingBrake);
+    stepDynamics(this.train, dt, this.train.slope, this.brakeHeld || this.parkingBrake, this.steepGradeAssist);
+    if (Math.abs(this.train.velocity) > 0.001) this.lastMotionSign = Math.sign(this.train.velocity);
     this.advance(this.train.velocity * dt);
     if (this.position.travelled >= 1000 && Math.abs(this.train.velocity) * 3.6 < 0.5) this.practiceComplete = true;
     this.slopeTimer += dt;

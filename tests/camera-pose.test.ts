@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { APP_CONFIG } from '../src/config';
-import { cabCameraFov, cabCameraPose, fixedCameraFov, fixedCameraPose, horizontalFovForVertical } from '../src/map/cameraPose';
+import { cabCameraFov, cabCameraPose, defaultFixedCameraView, fixedCameraFov, fixedCameraPose, horizontalFovForVertical, rotateFixedCamera, zoomFixedCamera } from '../src/map/cameraPose';
 import { bearing, distance } from '../src/utils/geo';
 import { Cartesian3, Matrix4 } from 'cesium';
 import { CAB_LAYOUT } from '../src/map/cabGeometry';
@@ -47,13 +47,13 @@ describe('驾驶室沿轨平视', () => {
 describe('第三人称固定视角', () => {
   const head = { lon: 118.8, lat: 32, height: 42 };
 
-  it('位于车头后上方 30°、高 200 m', () => {
+  it('位于车头后上方 30°、高 150 m', () => {
     const pose = fixedCameraPose(head, 90);
-    expect(pose.altitude).toBeCloseTo(242, 9);
+    expect(pose.altitude).toBeCloseTo(192, 9);
     const horizontal = distance(head, pose);
     // offsetPoint 使用局部米制近似，允许 1 m 内的投影误差。
-    expect(Math.abs(horizontal - 200 / Math.tan(Math.PI / 6))).toBeLessThan(1);
-    expect(Math.atan2(200, horizontal) * 180 / Math.PI).toBeCloseTo(30, 1);
+    expect(Math.abs(horizontal - 150 / Math.tan(Math.PI / 6))).toBeLessThan(1);
+    expect(Math.atan2(150, horizontal) * 180 / Math.PI).toBeCloseTo(30, 1);
     expect(bearing(head, pose)).toBeCloseTo(270, 2);
   });
 
@@ -61,13 +61,46 @@ describe('第三人称固定视角', () => {
     const pose = fixedCameraPose(head, 37);
     expect(pose.heading).toBe(37);
     expect(pose.pitch).toBeCloseTo(-Math.PI / 18, 10);
-    expect(APP_CONFIG.camera.fixedView.height).toBe(200);
+    expect(APP_CONFIG.camera.fixedView.height).toBe(150);
     expect(APP_CONFIG.camera.fixedView.elevationDegrees).toBe(30);
   });
 
   it('正北车头时相机位于正南', () => {
     const pose = fixedCameraPose(head, 0);
     expect(bearing(head, pose)).toBeCloseTo(180, 2);
+  });
+
+  it('拖动绕车旋转并保持车头位于视轴下方20度，跟随转弯保留用户偏角', () => {
+    const view = defaultFixedCameraView();
+    rotateFixedCamera(view, -450, -100);
+    const pose = fixedCameraPose(head, 90, view);
+    expect(pose.heading).toBe(180);
+    expect(pose.pitch * 180 / Math.PI).toBeCloseTo(-30);
+    expect(bearing(head, pose)).toBeCloseTo(0, 2);
+    expect(Math.atan2(view.height, distance(head, pose)) * 180 / Math.PI).toBeCloseTo(50, 0);
+    expect(fixedCameraPose(head, 120, view).heading).toBe(210);
+    rotateFixedCamera(view, 100000, -100000);
+    expect(view.pitch).toBe(-65);
+    expect(Number.isFinite(fixedCameraPose(head, 90, view).lon)).toBe(true);
+    rotateFixedCamera(view, 0, 100000);
+    expect(view.pitch).toBe(10);
+  });
+
+  it('滚轮只改变高度和跟随距离，限制20–1500米，重新进入使用默认状态', () => {
+    const view = defaultFixedCameraView();
+    zoomFixedCamera(view, 120);
+    expect(view.height).toBeLessThan(150);
+    const pose = fixedCameraPose(head, 37, view);
+    expect(pose.altitude - head.height).toBeCloseTo(view.height);
+    expect(pose.heading).toBe(37);
+    expect(pose.pitch).toBeCloseTo(-Math.PI / 18);
+    zoomFixedCamera(view, -120);
+    expect(view.height).toBeCloseTo(150);
+    zoomFixedCamera(view, -100000);
+    expect(view.height).toBe(1500);
+    zoomFixedCamera(view, 100000);
+    expect(view.height).toBe(20);
+    expect(defaultFixedCameraView()).toEqual({ height: 150, yaw: 0, pitch: -10 });
   });
 
   it('固定视角的竖直视场覆盖车头在视轴下方的 20°', () => {

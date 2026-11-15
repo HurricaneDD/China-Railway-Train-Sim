@@ -1,7 +1,20 @@
 import { APP_CONFIG } from '../config';
-import type { TrainState } from '../types';
+import type { Reverser, TrainState } from '../types';
 
 const G = 9.80665;
+
+/** Trip-only state, deliberately separate from TrainState / V1 saves. */
+export interface SteepGradeAssistState {
+  active: boolean;
+  direction: Reverser;
+  sufficientTime: number;
+  /** Magnitude of extra traction actually applied, in N. */
+  force: number;
+}
+
+export function initialSteepGradeAssistState(): SteepGradeAssistState {
+  return { active: false, direction: 0, sufficientTime: 0, force: 0 };
+}
 
 export function totalMass(): number {
   return APP_CONFIG.train.locomotive.mass + APP_CONFIG.train.cars.reduce((sum, car) => sum + car.mass, 0);
@@ -26,7 +39,8 @@ export function initialTrainState(): TrainState {
   };
 }
 
-export function stepDynamics(state: TrainState, dt: number, slope: number, brakeHeld: boolean): void {
+// Omitting the runtime preserves the unassisted dynamics for comparison / regression.
+export function stepDynamics(state: TrainState, dt: number, slope: number, brakeHeld: boolean, assist?: SteepGradeAssistState): void {
   const config = APP_CONFIG.train;
   state.brakeCommand = Math.max(0, Math.min(100, state.brakeCommand + (brakeHeld ? 100 / config.brakeApplySeconds : -100 / config.brakeReleaseSeconds) * dt));
   const brakeRate = 100 / (state.brakeActual < state.brakeCommand ? config.brakeApplySeconds : config.brakeReleaseSeconds);
@@ -45,6 +59,48 @@ export function stepDynamics(state: TrainState, dt: number, slope: number, brake
   state.resistanceForce = speed > 0.002 ? config.resistance.a + config.resistance.b * speed + config.resistance.c * speed * speed : 0;
   state.gradeForce = totalMass() * G * Math.sin(Math.atan(slope));
   state.slope = slope;
+
+  if (assist) {
+    const settings = config.steepGradeAssist;
+    const command = state.reverser;
+    const changedDirection = assist.active && assist.direction !== command;
+    assist.force = 0;
+    if (!settings.enabled || !command || changedDirection || state.throttle < settings.minThrottle
+      || brakeHeld || state.brakeActual > settings.maxBrakeActual) {
+      Object.assign(assist, initialSteepGradeAssistState());
+    } else {
+      const directedSpeedKmh = state.velocity * command * 3.6;
+      // Use forward rolling resistance even during rollback: recovery must also
+      // cover resistance after crossing zero, without manipulating velocity.
+      const rolling = config.resistance.a + config.resistance.b * speed + config.resistance.c * speed * speed;
+      const maintainingForce = state.gradeForce * command + rolling;
+      const normalTraction = Math.abs(state.tractionForce);
+      const insufficient = normalTraction < maintainingForce;
+      if (!assist.active && slope * command >= settings.minSlope
+        && directedSpeedKmh < settings.activationSpeedKmh && insufficient) {
+        assist.active = true;
+        assist.direction = command;
+      }
+      if (assist.active) {
+        assist.sufficientTime = insufficient ? 0 : assist.sufficientTime + dt;
+        if (assist.sufficientTime + 1e-9 >= settings.exitSeconds) {
+          Object.assign(assist, initialSteepGradeAssistState());
+        } else if (insufficient) {
+          const accelerationFraction = Math.max(0, Math.min(1,
+            (settings.crawlSpeedKmh - directedSpeedKmh) / (settings.crawlSpeedKmh - settings.taperStartKmh)));
+          const target = Math.min(settings.maxTotalForce,
+            maintainingForce + totalMass() * settings.targetAcceleration * accelerationFraction);
+          if (target > normalTraction) {
+            // Temporarily lift BOTH requested traction and equivalent adhesion;
+            // leave locomotive parameters, base adhesion and manual sand intact.
+            const effectiveTraction = Math.min(Math.max(requested, target), Math.max(adhesionLimit, target), settings.maxTotalForce);
+            assist.force = effectiveTraction - normalTraction;
+            state.tractionForce = effectiveTraction * command;
+          }
+        }
+      }
+    }
+  }
 
   // At rest, brakes and static rolling resistance oppose the applied force.
   // Otherwise full brakes would still allow a gravity impulse every other tick.

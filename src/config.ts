@@ -77,6 +77,18 @@ export const APP_CONFIG = {
     brakeApplySeconds: 4,
     brakeReleaseSeconds: 4,
     reverseThresholdKmh: 0.5,
+    steepGradeAssist: {
+      enabled: true,
+      minSlope: 0.06,
+      minThrottle: 80,
+      maxBrakeActual: 0.1,
+      activationSpeedKmh: 8,
+      taperStartKmh: 12,
+      crawlSpeedKmh: 15,
+      targetAcceleration: 0.15,
+      maxTotalForce: 750_000,
+      exitSeconds: 1,
+    },
   },
   simulation: {
     fixedStep: 1 / 60,
@@ -112,12 +124,16 @@ export const APP_CONFIG = {
     minRange: 35,
     maxRange: 900,
     smoothing: 5,
-    // “第三人称固定”：相机在车头正后方，与车头连线仰角 30°、高于车头 200 m，
-    // 水平后移量由 200 / tan(30°) 决定；视线俯角固定为 10°，不提供自由旋转。
+    // “第三人称固定”：默认后上方 30°、高于车头 150 m、俯角 -10°。
+    // 拖动调整绕车方位和俯仰，滚轮调整相对车头高度，继续随车跟随。
     // 车头位于视轴下方 20°，因此该视角使用 50° 竖直视场，避免列车落到画面外。
     fixedView: {
       elevationDegrees: 30,
-      height: 200,
+      height: 150,
+      minHeight: 20,
+      maxHeight: 1500,
+      dragDegreesPerPixel: 0.2,
+      zoomSensitivity: 0.0015,
       pitchDegrees: -10,
       verticalFovDegrees: 50,
     },

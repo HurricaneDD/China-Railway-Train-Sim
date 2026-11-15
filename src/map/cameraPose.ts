@@ -42,25 +42,45 @@ export function cabCameraFov(width: number, height: number): number {
   return horizontalFovForVertical(vertical, aspect);
 }
 
-/**
- * 计算“第三人称固定”视角的相机位置与朝向。
- *
- * 相机位于车头正后方，与车头的连线相对水平面为 30° 仰角，并高于车头 200 m；
- * 因此水平后移距离为 200 / tan(30°) ≈ 346.4 m。相机朝向与车头一致，
- * 俯角固定为 10°（Cesium 中负 pitch 表示向下看）。
- */
-export function fixedCameraPose(head: LonLat & { height: number }, trainHeading: number): FixedCameraPose {
-  const { elevationDegrees, height, pitchDegrees } = APP_CONFIG.camera.fixedView;
-  const elevation = elevationDegrees * Math.PI / 180;
-  const behind = height / Math.tan(elevation);
-  // offsetPoint 的 heading 与 Cesium 相同（正北为 0°、顺时针）；heading + 90 表示车尾方向。
-  const position = offsetPoint(head, trainHeading + 90, behind);
+export interface FixedCameraView {
+  height: number;
+  yaw: number;
+  pitch: number;
+}
+
+export function defaultFixedCameraView(): FixedCameraView {
+  return { height: APP_CONFIG.camera.fixedView.height, yaw: 0, pitch: APP_CONFIG.camera.fixedView.pitchDegrees };
+}
+
+/** Orbit around the train while retaining its initial position below the optical axis. */
+export function rotateFixedCamera(view: FixedCameraView, dx: number, dy: number): void {
+  const sensitivity = APP_CONFIG.camera.fixedView.dragDegreesPerPixel;
+  view.yaw = ((view.yaw - dx * sensitivity) % 360 + 360) % 360;
+  view.pitch = Math.max(-65, Math.min(10, view.pitch + dy * sensitivity));
+}
+
+/** Cesium wheel delta is positive toward the user (zoom in). */
+export function zoomFixedCamera(view: FixedCameraView, delta: number): void {
+  const config = APP_CONFIG.camera.fixedView;
+  view.height = Math.max(config.minHeight, Math.min(config.maxHeight,
+    view.height * Math.exp(-delta * config.zoomSensitivity)));
+}
+
+/** Defaults preserve the original 30° elevation, -10° pitch and 50° vertical lens. */
+export function fixedCameraPose(head: LonLat & { height: number }, trainHeading: number,
+  view: FixedCameraView = defaultFixedCameraView()): FixedCameraPose {
+  const config = APP_CONFIG.camera.fixedView;
+  const elevation = (config.elevationDegrees + config.pitchDegrees - view.pitch) * Math.PI / 180;
+  const behind = view.height / Math.tan(elevation);
+  const heading = trainHeading + view.yaw;
+  // offsetPoint uses east=0°, unlike Cesium's north=0°.
+  const position = offsetPoint(head, heading + 90, behind);
   return {
     lon: position.lon,
     lat: position.lat,
-    altitude: head.height + height,
-    heading: trainHeading,
-    pitch: pitchDegrees * Math.PI / 180,
+    altitude: head.height + view.height,
+    heading,
+    pitch: view.pitch * Math.PI / 180,
   };
 }
 

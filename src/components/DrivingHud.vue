@@ -39,10 +39,6 @@ function lineName(): string {
 function provinceName(): string {
   return props.session.position?.province ?? '';
 }
-function nearestStationText(): string {
-  const station = props.session.nearestStation;
-  return station ? `${station.name} · ${(station.distance / 1000).toFixed(1)} km` : '—';
-}
 function practiceText(): string {
   if (props.session.practiceComplete) return '✓ 已完成 1 km 停稳';
   return `${((props.session.position?.travelled ?? 0) / 1000).toFixed(2)} / 1.00 km`;
@@ -146,7 +142,7 @@ onBeforeUnmount(() => {
               <span>第三人称自由</span><small>外部视角</small><span class="menu-check">{{ cameraMode === 'free' ? '✓' : '' }}</span>
             </button>
             <button role="menuitemradio" :aria-checked="cameraMode === 'fixed'" :class="{ active: cameraMode === 'fixed' }" @click="chooseView('fixed')">
-              <span>第三人称固定</span><small>后上方 200 m</small><span class="menu-check">{{ cameraMode === 'fixed' ? '✓' : '' }}</span>
+              <span>第三人称固定</span><small>默认高 150 m</small><span class="menu-check">{{ cameraMode === 'fixed' ? '✓' : '' }}</span>
             </button>
           </div>
         </div>
@@ -197,9 +193,9 @@ onBeforeUnmount(() => {
       </div>
       <div v-else-if="session.connectionWarning" class="route-status" role="status">{{ session.connectionWarning }}</div>
 
-      <div v-if="cameraMode === 'free'" class="camera-hint">
-        左键拖动旋转 · 滚轮缩放
-        <div><button @click="$emit('camera', cameraRange - 35)">−</button><button @click="$emit('camera', cameraRange + 35)">＋</button></div>
+      <div v-if="cameraMode !== 'cab'" class="camera-hint">
+        {{ cameraMode === 'fixed' ? '左键/单指拖动旋转 · 滚轮调节高度' : '左键拖动旋转 · 滚轮缩放' }}
+        <div v-if="cameraMode === 'free'"><button @click="$emit('camera', cameraRange - 35)">−</button><button @click="$emit('camera', cameraRange + 35)">＋</button></div>
       </div>
     </main>
 
@@ -226,6 +222,7 @@ onBeforeUnmount(() => {
             <div><dt>列车管压</dt><dd>{{ session.train.brakePipe.toFixed(0) }} kPa</dd></div>
             <div><dt>轮轨黏着</dt><dd :class="session.train.adhesionLimited ? 'warning-text' : 'ok-text'">{{ session.train.adhesionLimited ? '黏着不足' : '正常' }}</dd></div>
             <div><dt>撒砂状态</dt><dd>{{ session.train.sandRemaining > 0 ? `${session.train.sandRemaining.toFixed(1)} s` : '未启用' }}</dd></div>
+            <div v-if="session.steepGradeAssist.force > 0"><dt>牵引辅助</dt><dd class="ok-text">陡坡牵引辅助</dd></div>
           </dl>
           <div v-if="session.junctionDistance < 120" class="junction-notice">前方 {{ Math.max(0, session.junctionDistance).toFixed(0) }} m 分岔</div>
         </section>
@@ -268,7 +265,8 @@ onBeforeUnmount(() => {
       <div class="status-field"><span>运行时间</span><strong>{{ elapsedText() }}</strong></div>
       <div class="status-field"><span>省份</span><strong>{{ provinceName() || '—' }}</strong></div>
       <div class="status-field"><span>线路</span><strong>{{ lineName() }}</strong></div>
-      <div class="status-field"><span>最近车站</span><strong>{{ nearestStationText() }}</strong></div>
+      <div class="status-field" title="正在远离的最近车站 · 直线距离，每秒更新"><span>上一最近站</span><strong class="station-distance" v-if="session.nearbyStations.previous" :title="session.nearbyStations.previous!.name"><em>{{ session.nearbyStations.previous!.name }}</em><i>{{ (session.nearbyStations.previous!.distance / 1000).toFixed(1) }} km</i></strong><strong v-else>—</strong></div>
+      <div class="status-field" title="正在接近的最近车站 · 直线距离，每秒更新"><span>下一最近站</span><strong class="station-distance" v-if="session.nearbyStations.next" :title="session.nearbyStations.next!.name"><em>{{ session.nearbyStations.next!.name }}</em><i>{{ (session.nearbyStations.next!.distance / 1000).toFixed(1) }} km</i></strong><strong v-else>—</strong></div>
     </footer>
 
     <div v-if="controlsOpen" class="controls-scrim" @click="controlsOpen = false" />

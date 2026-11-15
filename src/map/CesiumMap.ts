@@ -8,7 +8,7 @@ import { APP_CONFIG } from '../config';
 import type { GameSession } from '../core/session';
 import type { CameraMode, LonLat, RailSegment, Station } from '../types';
 import { BASEMAPS, DEFAULT_MAP_TILES, type MapTileId } from './basemap';
-import { cabCameraFov, cabCameraPose, fixedCameraFov, fixedCameraPose } from './cameraPose';
+import { cabCameraFov, cabCameraPose, defaultFixedCameraView, fixedCameraFov, fixedCameraPose, rotateFixedCamera, zoomFixedCamera } from './cameraPose';
 import { createGcj02ImageryProvider } from './gcj02ImageryProvider';
 import { RailRenderer } from './RailRenderer';
 import { SceneryManager } from './SceneryManager';
@@ -44,6 +44,9 @@ export class CesiumMap {
   private cameraRange: number = APP_CONFIG.camera.range;
   private cameraRangeDirty = true;
   private cameraMode: CameraMode = 'cab';
+  private fixedView = defaultFixedCameraView();
+  private fixedDragging = false;
+  private stopFixedDrag = (): void => { this.fixedDragging = false; };
   private defaultFov = Math.PI / 3;
   private cabHeading?: number;
   private removeBeforeUpdate?: () => void;
@@ -304,6 +307,8 @@ export class CesiumMap {
   }
 
   setCameraMode(mode: CameraMode): void {
+    if (mode === 'fixed' && this.cameraMode !== mode) this.fixedView = defaultFixedCameraView();
+    this.stopFixedDrag();
     this.cameraMode = mode;
     this.cameraTarget = undefined;
     this.cabHeading = undefined;
@@ -331,13 +336,27 @@ export class CesiumMap {
       this.cabRenderer?.destroy();
       this.clearProvinceRailway();
     }
+    window.removeEventListener('blur', this.stopFixedDrag);
     this.handler?.destroy();
     if (this.viewer && !this.viewer.isDestroyed()) this.viewer.destroy();
   }
 
   private setupPicking(): void {
     this.handler = new ScreenSpaceEventHandler(this.viewer.scene.canvas);
-    this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => { this.downPosition = event.position; }, ScreenSpaceEventType.LEFT_DOWN);
+    window.addEventListener('blur', this.stopFixedDrag);
+    // Cesium maps a single touch to LEFT_DOWN / MOUSE_MOVE / LEFT_UP, including cancellation.
+    this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
+      this.downPosition = Cartesian2.clone(event.position);
+      this.fixedDragging = this.cameraMode === 'fixed' && !!this.session?.running;
+    }, ScreenSpaceEventType.LEFT_DOWN);
+    this.handler.setInputAction(this.stopFixedDrag, ScreenSpaceEventType.LEFT_UP);
+    this.handler.setInputAction((event: ScreenSpaceEventHandler.MotionEvent) => {
+      if (!this.fixedDragging || this.cameraMode !== 'fixed' || !this.session?.running) return;
+      rotateFixedCamera(this.fixedView, event.endPosition.x - event.startPosition.x, event.endPosition.y - event.startPosition.y);
+    }, ScreenSpaceEventType.MOUSE_MOVE);
+    this.handler.setInputAction((delta: number) => {
+      if (this.cameraMode === 'fixed' && this.session?.running) zoomFixedCamera(this.fixedView, delta);
+    }, ScreenSpaceEventType.WHEEL);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
       if (!this.downPosition || Cartesian2.distance(this.downPosition, event.position) > 5) return;
       const picked = this.viewer.scene.pick(event.position);
@@ -375,7 +394,7 @@ export class CesiumMap {
       }
       const inCab = this.cameraMode === 'cab';
       if (!inCab) this.cabRenderer.hide();
-      // 只有“第三人称自由”允许玩家旋转/缩放；固定视角和驾驶室每帧重置相机。
+      // 自由视角使用 Cesium 控制器；固定视角用独立拖动/滚轮状态随车重建相机。
       this.viewer.scene.screenSpaceCameraController.enableInputs = this.cameraMode === 'free';
       this.trainRenderer.update(inCab ? [] : points);
       if (points[0]) {
@@ -419,7 +438,7 @@ export class CesiumMap {
   private followFixed(lon: number, lat: number, height: number, heading: number): void {
     const canvas = this.viewer.scene.canvas;
     this.applyFov(fixedCameraFov(canvas.clientWidth, canvas.clientHeight));
-    const pose = fixedCameraPose({ lon, lat, height }, heading);
+    const pose = fixedCameraPose({ lon, lat, height }, heading, this.fixedView);
     this.viewer.camera.lookAtTransform(Matrix4.IDENTITY);
     this.viewer.camera.setView({
       destination: Cartesian3.fromDegrees(pose.lon, pose.lat, pose.altitude),
