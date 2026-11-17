@@ -435,7 +435,7 @@ async function retryData(): Promise<void> {
       <div v-if="selectingMap" class="map-select-banner"><span class="pulse" />地图选点已启用 · 点击铁路附近位置<button @click="selectingMap = false; map?.setPicking()">返回选站</button></div>
     </div>
     <DrivingHud v-else :session="session" :update-key="updateKey" :camera-range="settings.cameraRange" :camera-mode="cameraMode" :paused="userPaused" @view="setCameraMode" @pause="userPaused = !userPaused" @help="showHelp = true" @parking="session.toggleParkingBrake()" @retry="session.retryBorder()" @menu="returnMenu" @save="quickSave" @saves="openOverlay('saves')" @settings="openOverlay('settings')" @reverser="changeReverser" @horn="(held) => held ? horn.start() : horn.stop()" @sand="triggerSand" @camera="(range) => { map?.setCameraRange(range); settings.cameraRange = Math.max(35, Math.min(900, range)); }" @speed="session.setSimulationSpeed($event)" />
-    <StationDepartureDialog v-if="departure" :departure="departure" :busy="busy" @close="departure = null" @depart="departFromStation" />
+    <StationDepartureDialog v-if="departure" :departure="departure" :stations="session.stations.stations" :busy="busy" @close="departure = null" @depart="departFromStation" />
     <JunctionDialog v-if="session.junction && !showHelp && !userPaused && !overlay" :junction="session.junction" @choose="(id) => session.chooseJunction(id)" />
     <div v-if="screen === 'driving' && showHelp" class="modal-backdrop">
       <section class="panel help-panel" role="dialog" aria-modal="true" aria-labelledby="help-title">

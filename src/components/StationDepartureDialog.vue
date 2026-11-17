@@ -1,17 +1,24 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { StationDeparture, StationDepartureLine } from '../types';
+import type { Station, StationDeparture, StationDepartureLine } from '../types';
 import { lineBearing } from '../data/stationDeparture';
+import { aheadTelecodes, directionSuffixText, pairHint, pairIndex, type PairIndex } from '../data/trainDirection';
 import { compassDirection } from '../utils/geo';
 import StationDepartureMap from './StationDepartureMap.vue';
 
-const props = defineProps<{ departure: StationDeparture; busy?: boolean }>();
+const props = defineProps<{ departure: StationDeparture; stations: Station[]; busy?: boolean }>();
 const emit = defineEmits<{ close: []; depart: [payload: { line: StationDepartureLine; direction: 1 | -1 }] }>();
 
 const selected = ref<string>();
 const direction = ref<0 | 1 | -1>(0);
 const active = computed(() => props.departure.lines.find(line => line.segmentId === selected.value));
 const nearest = computed(() => props.departure.lines[0]);
+const timetableIndex = ref<PairIndex | null>(null);
+
+onMounted(async () => {
+  // 时刻表数据缺失（未生成）时保持 null，界面退回纯地理方位显示。
+  timetableIndex.value = await pairIndex();
+});
 
 function displayName(line: StationDepartureLine): string {
   return line.name === '未命名铁路' ? '未命名线路' : line.name;
@@ -21,8 +28,17 @@ function bearingOf(line: StationDepartureLine, sign: 1 | -1): number {
   return lineBearing(line, sign);
 }
 
+/** 沿前进方向最近两个车站的行别推定（车次奇偶统计）；无数据/证据不足时为空串。 */
+function hintOf(line: StationDepartureLine | undefined, sign: 1 | -1): string {
+  if (!line || !timetableIndex.value) return '';
+  const pair = aheadTelecodes(props.departure.center, bearingOf(line, sign), props.stations);
+  if (!pair) return '';
+  return directionSuffixText(pairHint(timetableIndex.value, pair[0], pair[1]));
+}
+
 function directionText(sign: 1 | -1): string {
-  return active.value ? `向${compassDirection(bearingOf(active.value, sign))}` : (sign > 0 ? '方向一' : '方向二');
+  if (!active.value) return sign > 0 ? '方向一' : '方向二';
+  return `向${compassDirection(bearingOf(active.value, sign))}${hintOf(active.value, sign)}`;
 }
 
 function selectLine(segmentId: string): void {
@@ -85,7 +101,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
             <span><i class="legend-node" />车站</span>
             <span><i class="legend-arrow">↑</i>运行方向</span>
           </div>
-          <p class="departure-caption">高德底图使用 GCJ-02；线路只在显示层转换为 GCJ-02 配准，区段、车站和存档仍为 WGS84。底图仅作地理参考，不表示真实站场、线路占用或信号；数据无法判定上下行，方向只按地理方位显示。</p>
+          <p class="departure-caption">高德底图使用 GCJ-02；线路只在显示层转换为 GCJ-02 配准，区段、车站和存档仍为 WGS84。底图仅作地理参考，不表示真实站场、线路占用或信号；{{ timetableIndex ? '“上行/下行方向”为车次奇偶统计推定（双数=上行），仅供参考' : '数据无法判定上下行，方向只按地理方位显示' }}。</p>
         </section>
 
         <aside class="departure-choice-panel" aria-label="始发线路与方向">
@@ -137,13 +153,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
             <div class="quick-grid">
               <button v-for="sign in ([1, -1] as const)" :key="sign" :disabled="!nearest || busy" @click="quickStart(sign)">
                 <span class="dir-arrow" :style="{ transform: nearest ? `rotate(${bearingOf(nearest, sign)}deg)` : 'rotate(0deg)' }" aria-hidden="true">↑</span>
-                <span>{{ nearest ? `向${compassDirection(bearingOf(nearest, sign))}出发` : '不可用' }}</span>
+                <span>{{ nearest ? `向${compassDirection(bearingOf(nearest, sign))}出发${hintOf(nearest, sign)}` : '不可用' }}</span>
               </button>
             </div>
             <p class="departure-note">直接吸附到离车站最近的线路并立即出发。数据不能区分正线与侧线，最近线路不一定是正线。</p>
           </section>
 
-          <p class="departure-fine-print">方向仅决定初始朝向；不推断真实上行/下行、站场归属或线路用途。确认后列车以驻车状态停在线路距站最近点。</p>
+          <p class="departure-fine-print">方向仅决定初始朝向；行别提示是车次奇偶的统计推定，不代表真实行别、站场归属或信号。确认后列车以驻车状态停在线路距站最近点。</p>
         </aside>
       </div>
     </section>

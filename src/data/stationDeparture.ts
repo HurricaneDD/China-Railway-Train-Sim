@@ -41,6 +41,7 @@ function toLine(segment: RailSegment, center: LonLat): StationDepartureLine | un
     bridge: segment.properties.bridge,
     tunnel: segment.properties.tunnel,
     points: lineWindow(segment, snapped.offset, APP_CONFIG.stationDeparture.windowMeters),
+    segment,
   };
 }
 

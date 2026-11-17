@@ -1,7 +1,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import cesium from 'vite-plugin-cesium';
-import { cp, mkdir, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 function railwayData(): Plugin {
@@ -49,9 +49,16 @@ function railwayData(): Plugin {
     },
     async closeBundle() {
       for (const file of files) {
+        const source = resolve(__dirname, 'data', file);
+        // 增强数据（data/enriched/）由脚本按需生成；尚未生成时跳过，不阻断构建。
+        try {
+          await access(source);
+        } catch {
+          continue;
+        }
         const target = resolve(__dirname, 'dist/data', file);
         await mkdir(resolve(target, '..'), { recursive: true });
-        await cp(resolve(__dirname, 'data', file), target, { recursive: true });
+        await cp(source, target, { recursive: true });
       }
       await cp(resolve(__dirname, 'data/README.md'), resolve(__dirname, 'dist/data/README.md'));
       // Landing-page background slides are static media, not provincial railway data.

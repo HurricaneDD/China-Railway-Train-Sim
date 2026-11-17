@@ -103,6 +103,8 @@ export interface StationDepartureLine {
   tunnel: boolean;
   /** Local display polyline around the departure point. */
   points: LonLat[];
+  /** 完整原始区段引用（只读几何，不参与拓扑查询），供行别推定沿整线投影。 */
+  segment?: RailSegment;
 }
 
 /** Local, display-only snapshot around a station. No yard or track numbering. */
