@@ -12,6 +12,6 @@ output/
 
 # neo 增强数据的抓取缓存与日志不入库（成品 geojson/索引才入库）
 /data/enriched/cache/
-/data/enriched/fetch.log
+/data/enriched/fetch*.log
 /data/scripts/__pycache__/
 .zcode/
