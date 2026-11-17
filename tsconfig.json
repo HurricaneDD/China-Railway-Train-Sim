@@ -1,6 +1,6 @@
 {
   "extends": "@vue/tsconfig/tsconfig.dom.json",
-  "include": ["src/**/*.ts", "src/**/*.vue", "vite.config.ts", "tests/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.vue", "vite.config.ts", "tests/**/*.ts", "dev/terrain-lab/**/*.ts"],
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tsbuildinfo",
     "baseUrl": ".",

@@ -69,6 +69,7 @@ function railwayCheckHtml(): Plugin {
       order: 'post',
       handler(html, context) {
         const path = (context.filename || context.path || '').replace(/\\/g, '/');
+        if (path.endsWith('dev/terrain-lab/index.html')) return html.replace(/(href|src)="cesium\//g, '$1="../../cesium/');
         if (!path.endsWith('dev/railway-check/index.html')) return html;
         return html
           .replace(/\s*<link[^>]+cesium[^>]*>/gi, '')
@@ -98,6 +99,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         railwayCheck: resolve(__dirname, 'dev/railway-check/index.html'),
+        ...(process.env.CRTS_TERRAIN_LAB === '1' ? { terrainLab: resolve(__dirname, 'dev/terrain-lab/index.html') } : {}),
       },
     },
   },
