@@ -9,3 +9,9 @@ output/
 # Runtime uses provincial files; keep the oversized merged source local.
 /data/cnrailway.geojson
 .tools/
+
+# neo 增强数据的抓取缓存与日志不入库（成品 geojson/索引才入库）
+/data/enriched/cache/
+/data/enriched/fetch.log
+/data/scripts/__pycache__/
+.zcode/

@@ -42,6 +42,12 @@ interface RawProvince {
 /** Injectable so the development inspector can resolve nested-page data paths in dev and build. */
 export type JsonFetcher = <T>(path: string) => Promise<T>;
 
+/** 增强数据（data/enriched/）的 OSM 标签为字符串；正式数据无该键，返回 undefined。 */
+function optionalTag(raw: Record<string, unknown>, key: string): string | undefined {
+  const value = raw[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
 // Alias lookups keep existing V1 save IDs valid without rendering duplicate geometry.
 class SegmentMap extends Map<string, RailSegment> {
   private aliases = new Map<string, string>();
@@ -86,7 +92,16 @@ export class RailNetwork {
 
   async loadProvince(province: ProvinceInfo): Promise<{ segments: number; nodes: number }> {
     if (this.loadedProvinces.has(province.adcode)) return { segments: this.segments.size, nodes: this.nodes.size };
-    const data = await this.loadJson<RawProvince>(province.file);
+    let data: RawProvince;
+    try {
+      data = await this.loadJson<RawProvince>(province.file);
+    } catch (error) {
+      if (!APP_CONFIG.data.enrichedRailways || !province.fallbackFile) throw error;
+      // 增强文件缺失或网络失败时回退正式数据，并记住本会话不再重试增强文件。
+      province.file = province.fallbackFile;
+      delete province.fallbackFile;
+      data = await this.loadJson<RawProvince>(province.file);
+    }
     if (data.type !== 'FeatureCollection' || !Array.isArray(data.features)) throw new Error(`${province.province}线路数据格式不正确`);
     data.features.forEach((feature, featureIndex) => {
       const properties = this.readProperties(feature.properties, province.province);
@@ -384,6 +399,15 @@ export class RailNetwork {
       layer: typeof raw.layer === 'number' ? raw.layer : 0,
       bridge: raw.bridge === 'T',
       tunnel: raw.tunnel === 'T',
+      maxspeed: optionalTag(raw, 'maxspeed'),
+      electrified: optionalTag(raw, 'electrified'),
+      voltage: optionalTag(raw, 'voltage'),
+      frequency: optionalTag(raw, 'frequency'),
+      gauge: optionalTag(raw, 'gauge'),
+      usage: optionalTag(raw, 'usage'),
+      service: optionalTag(raw, 'service'),
+      tracks: optionalTag(raw, 'tracks'),
+      'railway:ref': optionalTag(raw, 'railway:ref'),
     };
   }
 
@@ -454,6 +478,25 @@ export class RailwayRepository {
     const data = await this.loadJson<ProvinceIndex>('provinces_index.json');
     if (data.type !== 'province_index' || !Array.isArray(data.provinces)) throw new Error('分省线路索引格式不正确');
     this.provinces = data.provinces;
+    if (APP_CONFIG.data.enrichedRailways) await this.mergeEnrichedIndex();
+  }
+
+  /** 尝试用增强索引（enriched/provinces_index.json）改写分省数据来源；任何失败都静默保持正式数据。 */
+  private async mergeEnrichedIndex(): Promise<void> {
+    try {
+      const enriched = await this.loadJson<{ provinces?: Array<{ adcode?: unknown; file?: unknown }> }>('enriched/provinces_index.json');
+      if (!Array.isArray(enriched.provinces)) return;
+      const byAdcode = new Map(this.provinces.map((province) => [province.adcode, province]));
+      for (const entry of enriched.provinces) {
+        if (typeof entry.adcode !== 'string' || typeof entry.file !== 'string' || !entry.file) continue;
+        const province = byAdcode.get(entry.adcode);
+        if (!province || province.file === entry.file) continue;
+        province.fallbackFile = province.file;
+        province.file = entry.file;
+      }
+    } catch {
+      // 增强索引不存在（未生成或生产构建未包含）时保持正式数据，不算错误。
+    }
   }
 
   byProvince(name: string): ProvinceInfo | undefined {

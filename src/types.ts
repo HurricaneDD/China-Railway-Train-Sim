@@ -37,6 +37,8 @@ export interface ProvinceInfo {
   feature_count: number;
   point_count: number;
   size_bytes: number;
+  /** 增强数据（data/enriched/）加载失败时回退的正式文件路径，仅索引合并阶段写入。 */
+  fallbackFile?: string;
 }
 
 export interface RailProperties {
@@ -48,6 +50,17 @@ export interface RailProperties {
   layer: number;
   bridge: boolean;
   tunnel: boolean;
+  /** 以下为 data/enriched/ 增强数据带来的原始 OSM 标签，正式数据不含这些键。 */
+  maxspeed?: string;
+  electrified?: string;
+  /** OSM 把接触网电压/频率拆成独立键（如 voltage=25000, frequency=50），与 electrified 配合显示。 */
+  voltage?: string;
+  frequency?: string;
+  gauge?: string;
+  usage?: string;
+  service?: string;
+  tracks?: string;
+  'railway:ref'?: string;
 }
 
 export interface RailSegment {

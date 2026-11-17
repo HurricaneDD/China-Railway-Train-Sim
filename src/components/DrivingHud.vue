@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { APP_CONFIG } from '../config';
+import { electrifiedText, speedLimitText } from '../data/osmTags';
 import type { GameSession } from '../core/session';
 import type { CameraMode, Reverser } from '../types';
 
@@ -34,7 +35,16 @@ function elapsedText(): string {
 function lineName(): string {
   if (!props.session.position) return '未定位';
   const name = props.session.railway.network.segments.get(props.session.position.segmentId)?.properties.name;
-  return !name || name === '未命名铁路' ? '未识别轨道' : name;
+  const base = !name || name === '未命名铁路' ? '未识别轨道' : name;
+  return base + electrifiedText(props.session.currentElectrification());
+}
+function limitText(): string {
+  return speedLimitText(props.session.currentSpeedLimit());
+}
+/** 超速警示：限速来自增强数据的 OSM maxspeed，容差 1 km/h。 */
+function overspeed(): boolean {
+  const limit = props.session.currentSpeedLimit();
+  return limit.kind === 'limit' && Math.abs(props.session.train.velocity) * 3.6 > limit.kph + 1;
 }
 function provinceName(): string {
   return props.session.position?.province ?? '';
@@ -211,7 +221,7 @@ onBeforeUnmount(() => {
           <div class="speed-value"><strong>{{ speedKmh() }}</strong><span>km/h</span></div>
           <div class="speed-meta">
             <span>加速度 <b>{{ session.train.acceleration.toFixed(2) }} m/s²</b></span>
-            <span>限速 <b>未配置</b></span>
+            <span :class="{ 'warning-text': overspeed() }">限速 <b>{{ limitText() }}</b>{{ overspeed() ? ' 超速' : '' }}</span>
           </div>
         </section>
 

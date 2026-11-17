@@ -5,7 +5,7 @@ import { cp, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 function railwayData(): Plugin {
-  const files = ['stations.json', 'provinces_index.json', 'geojson'];
+  const files = ['stations.json', 'provinces_index.json', 'geojson', 'enriched/geojson', 'enriched/provinces_index.json'];
   return {
     name: 'railway-data',
     configureServer(server) {

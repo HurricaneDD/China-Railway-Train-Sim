@@ -10,6 +10,8 @@ export const APP_CONFIG = {
     maxCachedProvinces: 4,
     renderRadius: 6500,
     maxRenderSegments: 900,
+    /** 是否尝试加载 OSM 标签增强数据（data/enriched/）；加载失败自动回退正式数据。 */
+    enrichedRailways: true,
   },
   stationDeparture: {
     /** Nearby original segments offered as selectable starting lines. */
@@ -109,6 +111,15 @@ export const APP_CONFIG = {
     junctionApproachMeters: 500,
     routeHistoryLength: 2500,
     autosaveSeconds: 30,
+  },
+  // 统一铁路纵断面推定参数。maxGrade 是推理边界，不是全国线路限速/限坡标准。
+  railProfile: {
+    densifyStep: 10,
+    medianHalf: 30,
+    smoothHalf: 150,
+    maxGrade: 0.04,
+    maxFillGap: 200,
+    minCoverage: 0.6,
   },
   camera: {
     cabEyeHeight: 2.15,
