@@ -58,10 +58,10 @@ COVERAGE_KEY = {
 
 DEFAULT_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
-    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.osm.jp/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.osm.jp/api/interpreter",
 ]
 
 USER_AGENT = "China-Railway-Train-Sim-Neo/0.1 (one-off OSM tag enrichment; local script)"
@@ -120,7 +120,7 @@ def fetch_batch(endpoint_state: dict, ids: list[str], args, batch_index: int) ->
             return cached.get("tags", {})
 
     endpoints = [e.strip() for e in args.endpoints.split(",") if e.strip()]
-    delays = [min(args.retry_backoff * (2**attempt), 120) for attempt in range(args.retries)]
+    delays = [min(args.retry_backoff * (2**attempt), 60) for attempt in range(args.retries)]
     result: dict[str, dict] = {}
     errors: list[str] = []
 
@@ -184,13 +184,14 @@ def main() -> int:
     parser.add_argument("--provinces", default="", help="逗号分隔 adcode 列表，默认全部")
     parser.add_argument("--batch-size", type=int, default=2000)
     parser.add_argument("--sleep", type=float, default=3.0, help="请求间延时秒数")
-    parser.add_argument("--retries", type=int, default=6)
-    parser.add_argument("--retry-backoff", type=float, default=5.0, help="重试退避基数秒数（按 2 的幂增长，上限 120s）")
+    parser.add_argument("--retries", type=int, default=10)
+    parser.add_argument("--retry-backoff", type=float, default=3.0, help="重试退避基数秒数（按 2 的幂增长，上限 60s）")
     parser.add_argument("--rounds", type=int, default=5, help="失败省份的整体重试轮数")
     parser.add_argument("--time-budget-minutes", type=float, default=170.0, help="总运行时间预算（分钟），超时优雅退出可续跑")
-    parser.add_argument("--overpass-timeout", type=int, default=180)
+    parser.add_argument("--overpass-timeout", type=int, default=60)
     parser.add_argument("--endpoints", default=",".join(DEFAULT_ENDPOINTS))
     parser.add_argument("--no-write", action="store_true", help="只抓标签写缓存，不生成增强文件")
+    parser.add_argument("--index-out", default=str(OUT / "provinces_index.json"), help="增强索引输出路径（多 worker 分片时各自指定）")
     args = parser.parse_args()
 
     index = load_json(DATA / "provinces_index.json")
@@ -282,7 +283,7 @@ def main() -> int:
             },
             "provinces": enriched_entries,
         }
-        write_json(OUT / "provinces_index.json", index_payload)
+        write_json(Path(args.index_out), index_payload)
         log("enriched index written")
     return 0
 
