@@ -120,7 +120,7 @@ def fetch_batch(endpoint_state: dict, ids: list[str], args, batch_index: int) ->
             return cached.get("tags", {})
 
     endpoints = [e.strip() for e in args.endpoints.split(",") if e.strip()]
-    delays = [args.retry_backoff * (2**attempt) for attempt in range(args.retries)]
+    delays = [min(args.retry_backoff * (2**attempt), 120) for attempt in range(args.retries)]
     result: dict[str, dict] = {}
     errors: list[str] = []
 
@@ -184,8 +184,10 @@ def main() -> int:
     parser.add_argument("--provinces", default="", help="逗号分隔 adcode 列表，默认全部")
     parser.add_argument("--batch-size", type=int, default=2000)
     parser.add_argument("--sleep", type=float, default=3.0, help="请求间延时秒数")
-    parser.add_argument("--retries", type=int, default=5)
-    parser.add_argument("--retry-backoff", type=float, default=5.0, help="重试退避基数秒数")
+    parser.add_argument("--retries", type=int, default=6)
+    parser.add_argument("--retry-backoff", type=float, default=5.0, help="重试退避基数秒数（按 2 的幂增长，上限 120s）")
+    parser.add_argument("--rounds", type=int, default=5, help="失败省份的整体重试轮数")
+    parser.add_argument("--time-budget-minutes", type=float, default=170.0, help="总运行时间预算（分钟），超时优雅退出可续跑")
     parser.add_argument("--overpass-timeout", type=int, default=180)
     parser.add_argument("--endpoints", default=",".join(DEFAULT_ENDPOINTS))
     parser.add_argument("--no-write", action="store_true", help="只抓标签写缓存，不生成增强文件")
@@ -202,13 +204,15 @@ def main() -> int:
 
     CACHE.mkdir(parents=True, exist_ok=True)
 
-    # 逐省增量处理：抓完一省立即产出增强文件，中断后重跑可直接续抓未完成的省份。
+    # 逐省增量处理：抓完一省立即产出增强文件；单省失败不阻断其他省份，
+    # 由多轮重试兜底（缓存内容寻址，重跑已完成省份几乎零成本）。
     endpoint_state = {"round": 0, "osm_base": ""}
     tags_by_id: dict[str, dict] = {}
-    enriched_entries: list[dict] = []
     batch_counter = 0
-    for entry in provinces:
-        adcode = entry["adcode"]
+    deadline = time.monotonic() + args.time_budget_minutes * 60
+
+    def process(entry: dict) -> dict:
+        nonlocal batch_counter
         source = DATA / entry["file"]
         dest = OUT / entry["file"]  # data/enriched/geojson/<adcode>-<省>.geojson
         ids = collect_ids(source)
@@ -229,19 +233,41 @@ def main() -> int:
             time.sleep(args.sleep)
         log(f"{entry['province']}: {len(ordered)} ids fetched")
         if args.no_write:
-            continue
+            return {}
         stats = build_enriched_file(source, dest, tags_by_id)
-        enriched_entries.append(
-            {
-                "adcode": adcode,
-                "province": entry["province"],
-                "file": f"enriched/{entry['file']}",
-                "feature_count": stats["features_total"],
-                "tag_coverage": {key: stats[value] for key, value in COVERAGE_KEY.items()},
-                "unmatched_ids": stats["unmatched_ids"],
-            }
-        )
         log(f"{entry['province']}: enriched -> {dest.name} (maxspeed {stats['with_maxspeed']}/{stats['features_total']})")
+        return {
+            "adcode": entry["adcode"],
+            "province": entry["province"],
+            "file": f"enriched/{entry['file']}",
+            "feature_count": stats["features_total"],
+            "tag_coverage": {key: stats[value] for key, value in COVERAGE_KEY.items()},
+            "unmatched_ids": stats["unmatched_ids"],
+        }
+
+    enriched_entries: list[dict] = []
+    pending = list(provinces)
+    for round_index in range(1, args.rounds + 1):
+        failed: list[dict] = []
+        for entry in pending:
+            if time.monotonic() > deadline:
+                log("时间预算用尽，本轮停止（缓存已保留，重跑脚本即可续抓）")
+                break
+            try:
+                result = process(entry)
+                if result:
+                    enriched_entries.append(result)
+            except Exception as exc:  # 无人值守：单省失败不阻断后续省份
+                log(f"{entry['province']}: 第 {round_index} 轮失败（{exc}）")
+                failed.append(entry)
+        pending = failed
+        if not pending or time.monotonic() > deadline:
+            break
+        log(f"第 {round_index} 轮结束，{len(pending)} 个省份稍后重试（60s）")
+        time.sleep(60)
+
+    if pending:
+        log(f"注意：{len(pending)} 个省份经 {args.rounds} 轮仍未完成（可重跑续抓）：{', '.join(item['province'] for item in pending)}")
 
     if not args.no_write:
         index_payload = {
