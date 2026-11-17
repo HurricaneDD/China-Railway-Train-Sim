@@ -15,3 +15,4 @@ output/
 /data/enriched/fetch*.log
 /data/scripts/__pycache__/
 .zcode/
+/data/enriched/provinces_index.part*.json
