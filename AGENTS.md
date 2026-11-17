@@ -908,3 +908,13 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - 不可行锚点保留端点、按锚点线性过渡并报告冲突；地形证据坡度超过推定上限时显式报告，不悄悄削平。`scenery.test.ts` 坡度语义夹具从 106‰ 调整到 21‰（低于推定上限），同源读取、倒车不翻转与采样失败保留坡度的断言不变。
 - 验证：`npm test` 26 文件、166 项全部通过（含 terrain-lab 实验 6 项）（新增 `tests/rail-profile.test.ts` 14 项：尖峰剔除、可行/不可行锚点、缺测与覆盖率、门户插值/延伸、服务编排、节点一致性、隧道不采样地形、单端锚点延伸方向、clear 重建、跨代数据丢弃）；`npm run build`（vue-tsc + Vite）通过。开发服务器 + 浏览器实测：南京南“最近线路向东北”出发进入驾驶 HUD，线路坡度显示 −10.1‰（纵断面路径生效），至观察时控制台无应用错误；完整长距离驾驶、桥隧路段与 30×/50× 行为待后续验收。
 - 协作记录：同期另一会话在同一目录开发“OSM 标签增强数据”，其 ff1c4b5（drive）与 70ea1c3（neo）提交包含了本工作在 session.ts/config.ts 的未提交改动，但缺 railProfile 模块文件，需合并 terrain 分支后才能独立构建。为避免干扰，terrain 工作改在独立工作树 `China-Railway-Train-Sim-terrain` 完成并提交；共享目录保持对方会话现状，未覆盖其任何工作。
+
+### 2026-11-18 — neo 分支：数据扩充与优化版（四阶段完成）
+
+- 按用户要求从 drive 开出 `neo` 分支进行数据扩充与优化版开发，无人值守执行四阶段并自循环验证。调研基础见 `docs/DATA-SOURCE-RESEARCH-2026-11-17.md`，实现细节见本文 4.16，增强数据说明见 `data/README.md` 第八章。同期 terrain 会话的纵断面 WIP 以独立提交（1e9d8a3）原样纳入，保证 neo 树自洽可构建。
+- **阶段一 OSM 标签增强**：`data/scripts/enrich_osm_tags.py` 按 osm_id 回查 Overpass（内容寻址缓存、多 worker 分片、`merge_enriched_index.py` 以文件系统为准合并）。33 省 324,634 要素全部完成（OSM 数据源 2026-11-17T19:26:54Z），覆盖率：maxspeed 48.7%、electrified 73.3%（voltage 56.8%）、gauge 83.1%、usage 55.0%、service 39.4%、tracks 1.5%。运行时 HUD 限速显示实际值/不限/未配置并超速变红警示（仅警示不改动力学），行程栏线路段追加"· 电气化 25kV AC 50Hz"式后缀；浏览器实测天津南"未识别轨道 · 电气化 25kV AC 50Hz"为真实标签渲染。
+- **阶段二 时刻表行别**：`build_timetable.py` 把 chinese-railway-gtfs（CC-BY-4.0，非官方授权）GTFS 转成 784 KB 派生文件（11,854 车次 / 98,471 相邻站对）；`trainDirection.ts` 车次奇偶统计推定站间行别，始发弹窗实测显示"↑向北出发 · 上行方向"（京津方向=上行，语义正确）。
+- **阶段三 纵断面持久化**：IndexedDB `elevation_profiles` 仓库（DB v1→2），railProfileService persist 钩子按拟合参数指纹缓存/失效，命中免整段重采样。`fetch_dem_corridor.py` Terrarium DEM 走廊采样实测南京走廊 5.7–11.9 m。
+- **阶段四 FlatGeobuf**：`convert_fgb.mjs`（属性键并集补 null 防整列丢失 + 逐特征逐键校验零误差），33 省 154.7 MB → 104.2 MB（0.67x）；运行时三级加载链（FGB → 增强 GeoJSON → 正式 GeoJSON）自动降级。浏览器实测：增强索引存在后广州南/江苏纯 FGB 直载，formal GeoJSON 请求为零；索引缺失时回退链亦实测生效（江苏早期 404 → 正式数据）。
+- 验证：`npm test` 29 文件 192 项全部通过（新增 osmTags/增强索引合并回退/行别推定/纵断面持久化/FGB 往返与加载链 32 项）；`npm run build` 通过；dist 断言 33 省 fgb+geojson+索引齐全、主页面含 Cesium、检查页不含；dev server 浏览器实测选站→始发→驾驶 HUD、限速/电气化/行别提示与数据加载链。超速警示的数值路径由单元测试覆盖（本环境浏览器面板被遮挡时 rAF 停摆，物理推进行为无法在无人值守会话中实测，与 AGENTS 已知边界一致）。
+- 边界提示：增强数据只读显示层，不参与拓扑/距离/存档；OSM 标签缺失区段如实"未配置"；行别为统计推定仅供参考；未推送远端（push 待用户指示）。
