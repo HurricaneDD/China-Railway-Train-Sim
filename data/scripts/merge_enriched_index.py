@@ -33,7 +33,44 @@ def main() -> int:
             merged[entry["adcode"]] = entry
         sources.append(part.name)
         osm_base = osm_base or str(payload.get("metadata", {}).get("osm_base_timestamp", ""))
-        part.unlink()
+    part.unlink()
+
+    # 文件系统为准：worker 轮次失败的省份可能已由其他 worker 产出文件但缺索引条目，
+    # 这里为存在增强 geojson 但无条目的省补一条（统计直接从文件扫描）。
+    main_index = json.loads((ROOT / "data" / "provinces_index.json").read_text(encoding="utf-8"))
+    name_by_adcode = {entry["adcode"]: entry for entry in main_index.get("provinces", [])}
+    synthesized = 0
+    for path in sorted((OUT / "geojson").glob("*.geojson")):
+        adcode = path.name.split("-")[0]
+        if adcode in merged:
+            continue
+        info = name_by_adcode.get(adcode)
+        if not info:
+            continue
+        coverage = dict.fromkeys(
+            ["maxspeed", "electrified", "voltage", "frequency", "gauge", "usage", "service", "tracks", "railway:ref"], 0)
+        unmatched = 0
+        features = json.loads(path.read_text(encoding="utf-8")).get("features", [])
+        for feature in features:
+            properties = feature.get("properties", {})
+            tags = {key: properties[key] for key in coverage if properties.get(key)}
+            if tags:
+                for key in tags:
+                    coverage[key] += 1
+            else:
+                unmatched += 1
+        merged[adcode] = {
+            "adcode": adcode,
+            "province": info["province"],
+            "file": f"enriched/geojson/{path.name}",
+            "feature_count": len(features),
+            "tag_coverage": coverage,
+            "unmatched_ids": unmatched,
+        }
+        synthesized += 1
+    if synthesized:
+        print(f"为 {synthesized} 个缺索引条目的省份从文件扫描合成")
+
     provinces = sorted(merged.values(), key=lambda item: item["adcode"])
     final = {
         "type": "enriched_province_index",
