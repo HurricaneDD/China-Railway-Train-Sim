@@ -78,6 +78,7 @@ export class CesiumMap {
     });
     this.viewer.scene.globe.baseColor = Color.fromCssColorString('#253a31');
     this.session?.elevation.setProvider(this.viewer.terrainProvider);
+    this.session?.railProfile.clear();
     this.viewer.scene.globe.depthTestAgainstTerrain = true;
     this.viewer.scene.screenSpaceCameraController.minimumZoomDistance = APP_CONFIG.camera.minRange;
     this.viewer.scene.screenSpaceCameraController.maximumZoomDistance = 20_000_000;
@@ -134,6 +135,7 @@ export class CesiumMap {
     if (terrain.status === 'fulfilled') {
       this.viewer.terrainProvider = terrain.value;
       this.session?.elevation.setProvider(terrain.value);
+      this.session?.railProfile.clear();
     }
     const unavailable = terrain.status === 'rejected' ? '地形' : '';
     if (unavailable) {

@@ -114,6 +114,8 @@ China-Railway-Train-Sim-Kimi/
 │  │  ├─ session.ts              固定步长循环、线路推进、分岔、编组路径历史
 │  │  ├─ dynamics.ts             与 Cesium 解耦的一维纵向动力学
 │  │  ├─ elevation.ts            Cesium 地形采样、缓存、坡度估计
+│  │  ├─ railProfile.ts          统一铁路纵断面拟合：稠密化、中值/平滑、坡度约束、桥隧门户推定
+│  │  ├─ railProfileService.ts   按需纵断面服务：节点锚点注册表、桥隧链式解析、缓存与版本
 │  │  ├─ storage.ts              IndexedDB 存档、localStorage 设置、V1 校验
 │  │  └─ audio.ts                Web Audio 合成鸣笛，可独立替换
 │  ├─ map/
@@ -302,6 +304,13 @@ China-Railway-Train-Sim-Kimi/
 - 相机后方和屏幕外的标签不参与布局；驾驶时超出 14 km 的标签也不参与。标签屏幕框使用估算字宽，站名超过 14 字截断为“…”；估算误差可能让边缘标签有数像素偏差。
 - 高德底图是 GCJ-02，车站标签仍使用 WGS84 坐标，由三维高德影像 provider 统一配准，不做二次 GCJ-02 转换。`StationDepartureMap` 的二维悬浮标签也改为显示具体站名，不再显示通用“车站”。
 
+### 4.15 统一铁路纵断面（第一阶段：坡度接入）
+
+- `src/core/railProfile.ts` 是无 Cesium 依赖的纯拟合器：沿原始区段折线按 `densifyStep`（10 m）稠密化取点，采样后经“线性填补缺测 → 有界窗口中值剔除 DEM 尖峰 → 三角窗平滑 → 端点锥形夹取 → 局部坡度约束（Lipschitz 前后向收紧）”得到一阶连续纵断面。原始 WGS84 平面线、区段身份与里程不改写；桥隧属性只作为“地形不代表轨面”的分类线索。
+- 可信度分级 `surveyed > manual > inferred > unknown`：当前全部有效纵断面为 `inferred`（地形推定或桥隧锚点推定）。采样覆盖率低于 `minCoverage`、端点附近缺测过大时返回空样本并保持不可用，不冒充实测值；`sampleRailProfile` 不可用时返回 `undefined`。
+- `src/core/railProfileService.ts` 负责编排：只构建当前区段及其直接相邻区段（不批量遍历已加载网络），缓存按 provider 代次整体清空（`CesiumMap` 在 `setProvider` 后调用 `railProfile.clear()`）。共享节点使用节点高程注册表保证连续性：地形段只锚定 `terrain` 级节点高程，先完成的一方登记、后完成的一方锚定；桥隧段不采样地形，两端锚点齐全时线性插值（洞口/桥头控制点），单端锚点时按锚点侧坡度延伸并把远端登记为 `extrapolated`，`extrapolated` 只供其他桥隧作锚点，可被后续地形拟合升级。
+- 接入点：`GameSession.refreshSlope` 优先用 `railProfile.ensure + sampleRailProfile` 计算车体前向坡度；桥隧锚点未就绪或纵断面不可用时完整回退原有“原始顶点插值”路径。编组历史点高度、车体位置和轨道网格仍读原始轨面（视觉统一属后续阶段）。`maxGrade`（默认 40‰）是推定边界而非全国线路标准；地形证据坡度超过上限时输出显式冲突报告，锚点不可行时保留锚点并按锚点线性过渡，不悄悄削平。
+
 ## 5. GitHub Pages 构建与部署
 
 1. 仓库 GitHub Settings → Pages → Source 选择 **GitHub Actions**。
@@ -417,6 +426,8 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 
 ## 9. 当前已知边界（不是已完成能力）
 
+- 2026-11-17 的 `dev/terrain-lab/` 是隔离实验，不接入正式驾驶。仅在 `CRTS_TERRAIN_LAB=1 npm run build` 时输出实验页；普通构建不包含该入口。实验验证了人工鼓包平滑与局部裁剪补面，但真实样本最大修正位于隧道，不能认定山体 DEM 错误；35‰ 仅是实验约束，未实现连续竖曲线、真实桥隧纵断面或保留山体的完整洞体。详见 `docs/TERRAIN-LAB-RESULTS-2026-11-17.md` 与 `docs/GLM53FLASH-DEVELOPMENT-HANDOFF.md`。
+
 - 陡坡牵引辅助是针对异常地形坡度的游戏辅助，750 kN 总力上限不能保证任意坡度起步；不修正线路数据或真实纵断面，也不提供坡中停车/驻坡补偿。辅助复用已有坡度输入，采样滞后仍存在。坡顶恢复满柄常规牵引后仍会按原动力学加速，退出延时不额外推车；倒滑恢复时阻力有利于止退，瞬时减速可略大于目标 0.15 m/s²。HUD 的“黏着不足”仍表示常规黏着限制，手动撒砂判断与计时独立。
 
 - 程序化轨旁设施只作驾驶参照，不是实测站场；接触网仅限南京南京沪高铁样板范围。轨面仍来自地形顶点插值，桥梁未获得真实桥面高程，隧道未裁切地形/建洞体；驾驶室不再随地表抬升，真实纵断面缺失时可能穿地形。OSM2World 建筑生产与外部场景包尚未接入；高倍速/慢网可能超出已就绪近景，手机性能和长期运行仍待验证。
@@ -454,6 +465,10 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - 主界面背景为单张图全屏 `cover`，按原图比例居中裁切；左侧保留横向深色渐变，移动端使用更重的暗色遮罩。
 - 主界面只是用不透明背景盖住 Cesium 地球，Viewer 仍在后台渲染并请求影像/地形瓦片；这不是“关闭三维地图”，GPU/网络占用仍存在，后台服务失败时仍会在开始页显示错误提示。
 - 三维车站站名标注只覆盖 `stations.json` 的有坐标记录：驾驶时仅创建 20 km 内最多 120 个实体，14 km 内最多 60 个不重叠标签；省域视图和密集站场会主动隐藏部分站名，因此不能据此判断站场全貌。标签使用固定 30 m 椭球显示高度，不贴地形起伏，也不代表站台、股道、行别或信号。相机后方和屏幕外的站点不显示标签；标签防重叠以估算字宽为准，边缘可能有数像素误差；按 2 km 位移刷新在 50× 高速驾驶时可能出现短暂标签更新延迟。
+- 统一纵断面第一阶段只接管坡度（动力学与 HUD）：车体位置、编组历史高度和轨道网格仍读原始顶点轨面，纵断面修正较大的路段（如隧道上方）可能出现“动力学坡度”与“可见轨面”不一致，视觉统一属后续阶段。
+- 桥隧段纵断面是节点锚点推定：双端锚点线性插值、单端锚点按入口坡度延伸，不是真实桥面标高或隧道埋深；相邻桥隧链靠 extrapolated 节点逐步解析，远端为低可信推定，后续地形拟合可升级。`extrapolated` 高程不作为地形段锚点，防止误差跨结构传播。
+- `maxGrade` 40‰ 是推定边界：真实坡度超过它的区段（缺失桥隧标注的陡地形）会被约束到上限并输出冲突报告；纵断面没有竖曲线，相邻坡度变化仍可能明显。
+- 纵断面缓存没有容量上限或内存压力回收；DEM 采样失败的区段每次 refreshSlope 重试（依赖 ElevationService 的失败重试语义）；拟合在主线程执行（有界窗口），未使用 Web Worker。纵断面不写入 V1 存档，读档/新行程按需重建。
 
 ## 10. 后续开发流程
 
@@ -831,3 +846,22 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - 底部行程栏由五项改为六项：距离、运行时间、省份、线路、上一最近站、下一最近站。长站名省略时公里数仍独立保留；≤640 px 为三列两行、84 px 高，地图与控制抽屉同步沿用该行程栏高度变量。操作说明和悬浮提示明确直线距离及每秒更新。
 - 验证：`npm test` 24 文件、144 项全部通过（新增纯函数 3 项、会话 2 项）；覆盖两方向最近距离、经过站点、倒车/倒滑、停车、正侧向/重合/无效坐标、缺少候选、真实时间缓存、50×、换向、新行程与读档。`npm run build` 通过；主页面仍含 Cesium 标签、检查页不含。生产构建在可见 Chromium 从南京南实际进入驾驶，显示上一最近站“南京南 · 0.0 km”、下一最近站“中华门 · 4.8 km”；1440×900 与 390×844 无横向溢出、公里数完整，控制台错误/警告均为 0。截图 `output/playwright/nearby-stations-desktop.png` 与 `nearby-stations-mobile.png`（不进入版本控制）。
 - 已知边界：这是接近/远离的地理近邻提示，不是时刻表停站顺序或沿选定路线的里程；可能选到邻线站。高倍速每真实秒可行进较远距离，站点及距离允许滞后一个刷新周期。正式数据、拓扑及 V1 存档格式未改。
+
+### 2026-11-17 — 默认建模/铁路地形实验与 GLM5.3 Flash 交接
+
+- 仓库：https://github.com/HurricaneDD/China-Railway-Train-Sim；基于 drive `9c4abd0` 建立独立工作树 `../China-Railway-Train-Sim-terrain-lab`、分支 `codex/terrain-lab-20261117`。原目录 main `f3a5324` 及既有未跟踪提示词文件保留。本轮未提交、推送或合并。
+- 新增 `dev/terrain-lab/`：南京南附近真实平面几何 5 km、501 个中心采样点、跨 6 原始区段，比较人工鼓包/在线地形下的原始轨面、仅平滑、裁剪并补面；程序化示意机车含车窗、车顶、转向架与轮轴。实验页面不修改正式 src、data 或 V1 存档；生产默认入口关闭。Vite 为实验嵌套页修正 Cesium 相对资源路径，tsconfig 对其进行类型检查。
+- 新增 `scripts/terrain-lab-route.ts`、`terrain-lab-browser-check.mjs`、`terrain-lab-report.py` 与 `tests/terrain-lab.test.ts`。后者覆盖人工尖峰、未知数据/约束失败、分块连续性、动力学差异与真实平面线来源；可见 Chrome/Apple M5/WebGL2 完成 A/B/C、网络失败回退、两源各 12 轮切换和 202 视点往返，最终无应用渲染错误，Entity 数量保持 29。
+- 数值复现：真实 10 m 地表最大局部坡度 513.26‰，现有 ElevationService/refreshSlope 公式最大输入坡度约 84.85‰；实验约束后局部坡度不超过 35‰，但相邻坡度仍存在明显跳变。真实最大高程修正 45.11 m 落在 tunnel 段，统一裁剪会把山体切成露天槽，明确列为失败示范，不能全国套用。裁剪后 globe.getHeight 仍返回原地形。
+- 验证：基线 24 文件 146 项、普通构建通过；实验后 25 文件 152 项全部通过，实验开启构建通过。静态产物 `/rail-lab/dev/terrain-lab/` 实际加载、切换裁剪并读取 Cesium Assets 返回 200；正式主页在该子路径启动。不是完整生产驾驶、手机、长期资源或全国验收。
+- 经验、完整限制、复跑方式、GLM 分阶段开发任务和验收矩阵见上述两篇 docs。原始 JSON、质量门禁、环境和截图位于 `output/playwright/terrain-lab/`，Git 忽略但包含在交接 ZIP 中。
+
+
+### 2026-11-18 — terrain 分支开线：统一铁路纵断面第一阶段
+
+- 仓库 https://github.com/HurricaneDD/China-Railway-Train-Sim。按用户要求从 drive（9c4abd0）开出 `terrain` 分支，本对话在此分支开发地形与建模工作。实验会话遗留的未提交改动先在 `codex/terrain-lab-20261117` 落盘提交（e4da2f5）并快进合入 terrain，实验内容仅 `CRTS_TERRAIN_LAB=1` 时编入构建，正式入口不变。
+- 新增 `src/core/railProfile.ts`（纯拟合器：稠密化、缺测填补、有界中值/平滑、端点锥形夹取、坡度 Lipschitz 约束、桥隧门户插值/单端延伸、样本查询）与 `src/core/railProfileService.ts`（按需 ensure 当前区段及直接邻居；节点高程注册表 terrain/extrapolated 分级；provider 代次清空与跨代丢弃）。参数集中在 `APP_CONFIG.railProfile`。
+- `GameSession.refreshSlope` 优先读取纵断面计算车体前向坡度，桥隧锚点未就绪或纵断面不可用时回退原有原始顶点插值；`CesiumMap` 在 `setProvider` 后调用 `railProfile.clear()`。车体位置、编组历史高度与轨道网格仍读原始轨面（视觉统一属后续阶段）。
+- 不可行锚点保留端点、按锚点线性过渡并报告冲突；地形证据坡度超过推定上限时显式报告，不悄悄削平。`scenery.test.ts` 坡度语义夹具从 106‰ 调整到 21‰（低于推定上限），同源读取、倒车不翻转与采样失败保留坡度的断言不变。
+- 验证：`npm test` 26 文件、166 项全部通过（含 terrain-lab 实验 6 项）（新增 `tests/rail-profile.test.ts` 14 项：尖峰剔除、可行/不可行锚点、缺测与覆盖率、门户插值/延伸、服务编排、节点一致性、隧道不采样地形、单端锚点延伸方向、clear 重建、跨代数据丢弃）；`npm run build`（vue-tsc + Vite）通过。开发服务器 + 浏览器实测：南京南“最近线路向东北”出发进入驾驶 HUD，线路坡度显示 −10.1‰（纵断面路径生效），至观察时控制台无应用错误；完整长距离驾驶、桥隧路段与 30×/50× 行为待后续验收。
+- 协作记录：同期另一会话在同一目录开发“OSM 标签增强数据”，其 ff1c4b5（drive）与 70ea1c3（neo）提交包含了本工作在 session.ts/config.ts 的未提交改动，但缺 railProfile 模块文件，需合并 terrain 分支后才能独立构建。为避免干扰，terrain 工作改在独立工作树 `China-Railway-Train-Sim-terrain` 完成并提交；共享目录保持对方会话现状，未覆盖其任何工作。
