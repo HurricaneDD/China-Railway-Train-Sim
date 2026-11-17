@@ -12,6 +12,8 @@ export const APP_CONFIG = {
     maxRenderSegments: 900,
     /** 是否尝试加载 OSM 标签增强数据（data/enriched/）；加载失败自动回退正式数据。 */
     enrichedRailways: true,
+    /** 是否优先尝试 FlatGeobuf 二进制数据（data/enriched/fgb/）；失败自动回退 GeoJSON。 */
+    flatgeobuf: true,
   },
   stationDeparture: {
     /** Nearby original segments offered as selectable starting lines. */

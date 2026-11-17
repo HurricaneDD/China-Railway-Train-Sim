@@ -1,7 +1,8 @@
 import { APP_CONFIG } from '../config';
+import { deserializeFgb } from './flatgeobufLoader';
 import type { LonLat, ProvinceInfo, RailNode, RailProperties, RailSegment, SnapResult } from '../types';
 import { bearing, distance, nearestOnSegment, pointAt } from '../utils/geo';
-import { fetchJson } from '../utils/assets';
+import { fetchBinary, fetchJson } from '../utils/assets';
 
 export interface RailBoundary {
   offset: number;
@@ -41,6 +42,9 @@ interface RawProvince {
 
 /** Injectable so the development inspector can resolve nested-page data paths in dev and build. */
 export type JsonFetcher = <T>(path: string) => Promise<T>;
+
+/** FlatGeobuf 等二进制数据取数；注入以便测试与嵌套页面复用。 */
+export type BinaryFetcher = (path: string) => Promise<ArrayBuffer>;
 
 /** 增强数据（data/enriched/）的 OSM 标签为字符串；正式数据无该键，返回 undefined。 */
 function optionalTag(raw: Record<string, unknown>, key: string): string | undefined {
@@ -88,20 +92,39 @@ export class RailNetwork {
   private segmentOrder = new Map<string, number>();
   private segmentSequence = 0;
 
-  constructor(private readonly loadJson: JsonFetcher = fetchJson) {}
+  constructor(
+    private readonly loadJson: JsonFetcher = fetchJson,
+    private readonly loadBinary?: BinaryFetcher,
+  ) {}
 
   async loadProvince(province: ProvinceInfo): Promise<{ segments: number; nodes: number }> {
     if (this.loadedProvinces.has(province.adcode)) return { segments: this.segments.size, nodes: this.nodes.size };
-    let data: RawProvince;
-    try {
-      data = await this.loadJson<RawProvince>(province.file);
-    } catch (error) {
-      if (!APP_CONFIG.data.enrichedRailways || !province.fallbackFile) throw error;
-      // 增强文件缺失或网络失败时回退正式数据，并记住本会话不再重试增强文件。
-      province.file = province.fallbackFile;
-      delete province.fallbackFile;
-      data = await this.loadJson<RawProvince>(province.file);
+    // 加载链：增强 FGB → 增强 GeoJSON → 正式 GeoJSON。任何一级失败自动降级。
+    const attempts: string[] = [];
+    if (APP_CONFIG.data.enrichedRailways && APP_CONFIG.data.flatgeobuf) {
+      const base = province.file.split('/').pop() ?? province.file;
+      attempts.push(`enriched/fgb/${base.replace(/\.geojson$/, '.fgb')}`);
     }
+    attempts.push(province.file);
+    if (province.fallbackFile) attempts.push(province.fallbackFile);
+    let data: RawProvince | undefined;
+    let lastError: unknown;
+    for (const path of attempts) {
+      try {
+        data = path.endsWith('.fgb')
+          ? await deserializeFgb(await (this.loadBinary ?? fetchBinary)(path))
+          : await this.loadJson<RawProvince>(path);
+        if (path !== province.file && province.fallbackFile && path === province.fallbackFile) {
+          // 回退成功：记住本会话不再尝试增强文件。
+          province.file = province.fallbackFile;
+          delete province.fallbackFile;
+        }
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (!data) throw lastError instanceof Error ? lastError : new Error(`${province.province}线路数据加载失败`);
     if (data.type !== 'FeatureCollection' || !Array.isArray(data.features)) throw new Error(`${province.province}线路数据格式不正确`);
     data.features.forEach((feature, featureIndex) => {
       const properties = this.readProperties(feature.properties, province.province);
@@ -469,8 +492,11 @@ export class RailwayRepository {
   provinces: ProvinceInfo[] = [];
   private loading = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly loadJson: JsonFetcher = fetchJson) {
-    this.network = new RailNetwork(loadJson);
+  constructor(
+    private readonly loadJson: JsonFetcher = fetchJson,
+    private readonly loadBinary?: BinaryFetcher,
+  ) {
+    this.network = new RailNetwork(loadJson, loadBinary);
   }
 
   async loadIndex(): Promise<void> {

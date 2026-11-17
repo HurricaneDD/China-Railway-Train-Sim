@@ -34,3 +34,19 @@ export async function fetchJson<T>(path: string): Promise<T> {
     clearTimeout(timer);
   }
 }
+
+/** FlatGeobuf 等二进制数据文件；与 fetchJson 相同的 20 秒超时语义。 */
+export async function fetchBinary(path: string): Promise<ArrayBuffer> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const response = await fetch(dataUrl(path), { signal: controller.signal });
+    if (!response.ok) throw new Error(`数据加载失败（${response.status}）：${path}`);
+    return await response.arrayBuffer();
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(`数据加载超时，请重试：${path}`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
