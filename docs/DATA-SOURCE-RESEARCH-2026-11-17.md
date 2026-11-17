@@ -146,17 +146,15 @@
 
 ---
 
-## 3. neo 分支开发路线（建议）
+## 3. neo 分支开发路线（2026-11-18 实施状态）
 
-原则：正式 `data/` 不改；新数据进独立文件/目录；每步带验证。
+原则：正式 `data/` 不改；新数据进独立目录 `data/enriched/`；每步带验证。实施记录见 `AGENTS.md` 4.16 与更新日志。
 
-1. **阶段一（数据扩充·零新来源）**：`data/scripts` 新增 OSM 标签增强脚本，为分省 GeoJSON 附加 `maxspeed/electrified/gauge/usage/service/tracks` 等字段，输出到独立目录（如 `data/geojson-enriched/`）；先试点江苏。运行时按增强字段渲染限速/电气化，缺失仍显示"未配置"。
-2. **阶段二（行别与时刻）**：接入 12306 系生成器（GTFS 或 JSON），产出派生文件（不进正式 `data/`），用于行别推定与站间时分。
-3. **阶段三（纵断面）**：Copernicus GLO-30 沿线预采样，生成参考纵断面，替换/补充运行时实时坡度采样。
-4. **阶段四（加载优化）**：江苏试点 FlatGeobuf 加载路径，对比体积/解析时间/内存，再决定是否推 33 省；派生拓扑持久化先用 IndexedDB（版本号失效机制），二期评估 SQLite WASM+OPFS。
-5. **穿插**：天地图 1:100 万核对断点；OSM 站点节点补 pending 坐标。
-
-每阶段完成需更新 `AGENTS.md`（当前实现/已知边界/更新日志）并跑 `npm test` / `npm run build`。
+1. ✅ **阶段一（OSM 标签增强）**：`data/scripts/enrich_osm_tags.py`（Overpass 按 osm_id 回查，多 worker 分片并行），运行时限速/电气化接线完成；33 省全量抓取受公共实例过载影响分批进行，缓存可续跑。
+2. ✅ **阶段二（行别与时刻）**：chinese-railway-gtfs → `build_timetable.py` → `enriched/timetable/trains.json`；`src/data/trainDirection.ts` 车次奇偶推定，始发弹窗已显示"上行/下行方向"提示。
+3. ✅ **阶段三（纵断面持久化）**：`elevation_profiles` IndexedDB 仓库 + railProfileService persist 钩子（拟合参数指纹失效）；`fetch_dem_corridor.py` 提供 Terrarium DEM 独立核对工具。
+4. ✅ **阶段四（FlatGeobuf）**：`convert_fgb.mjs`（属性键并集补 null 防整列丢失 + 逐键校验），运行时三级加载链自动降级；天津实测 0.67×。
+5. ⏳ **穿插项**：天地图 1:100 万断点核对（需注册账号，未做）；OSM 站点节点补 pending 坐标（启发式匹配风险，留待后续）。
 
 ---
 
