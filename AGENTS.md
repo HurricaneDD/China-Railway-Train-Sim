@@ -109,14 +109,17 @@ China-Railway-Train-Sim-Kimi/
 │  ├─ data/
 │  │  ├─ stations.ts             车站读取、筛选、搜索、pending 处理
 │  │  ├─ stationDeparture.ts     车站周边可选线路快照（无编号、无拓扑计算）
-│  │  └─ railway.ts              分省加载、GeoJSON 适配、空间索引、派生拓扑
+│  │  ├─ osmTags.ts              OSM 增强标签解析：限速、电气化（纯函数）
+│  │  ├─ trainDirection.ts       车次奇偶行别推定与前方站对选取
+│  │  ├─ flatgeobufLoader.ts     FlatGeobuf 分省数据反序列化
+│  │  └─ railway.ts              分省加载、GeoJSON/FGB 适配、空间索引、派生拓扑
 │  ├─ core/
 │  │  ├─ session.ts              固定步长循环、线路推进、分岔、编组路径历史
 │  │  ├─ dynamics.ts             与 Cesium 解耦的一维纵向动力学
 │  │  ├─ elevation.ts            Cesium 地形采样、缓存、坡度估计
 │  │  ├─ railProfile.ts          统一铁路纵断面拟合：稠密化、中值/平滑、坡度约束、桥隧门户推定
 │  │  ├─ railProfileService.ts   按需纵断面服务：节点锚点注册表、桥隧链式解析、缓存与版本
-│  │  ├─ storage.ts              IndexedDB 存档、localStorage 设置、V1 校验
+│  │  ├─ storage.ts              IndexedDB 存档、localStorage 设置、纵断面缓存、V1 校验
 │  │  └─ audio.ts                Web Audio 合成鸣笛，可独立替换
 │  ├─ map/
 │  │  ├─ CesiumMap.ts            地球、影像、地形、站点、相机与地图拾取
@@ -311,6 +314,36 @@ China-Railway-Train-Sim-Kimi/
 - `src/core/railProfileService.ts` 负责编排：只构建当前区段及其直接相邻区段（不批量遍历已加载网络），缓存按 provider 代次整体清空（`CesiumMap` 在 `setProvider` 后调用 `railProfile.clear()`）。共享节点使用节点高程注册表保证连续性：地形段只锚定 `terrain` 级节点高程，先完成的一方登记、后完成的一方锚定；桥隧段不采样地形，两端锚点齐全时线性插值（洞口/桥头控制点），单端锚点时按锚点侧坡度延伸并把远端登记为 `extrapolated`，`extrapolated` 只供其他桥隧作锚点，可被后续地形拟合升级。
 - 接入点：`GameSession.refreshSlope` 优先用 `railProfile.ensure + sampleRailProfile` 计算车体前向坡度；桥隧锚点未就绪或纵断面不可用时完整回退原有“原始顶点插值”路径。编组历史点高度、车体位置和轨道网格仍读原始轨面（视觉统一属后续阶段）。`maxGrade`（默认 40‰）是推定边界而非全国线路标准；地形证据坡度超过上限时输出显式冲突报告，锚点不可行时保留锚点并按锚点线性过渡，不悄悄削平。
 
+### 4.16 neo 分支：数据扩充与优化版
+
+> neo 分支（自 drive 分出）定位为"数据扩充与优化版"。调研结论见 `docs/DATA-SOURCE-RESEARCH-2026-11-17.md`；增强数据统一放 `data/enriched/`，正式 `data/` 不改一字段，几何与要素顺序与正式分省文件逐字节一致，派生区段 ID 不变，存档 V1 兼容。
+
+**OSM 标签增强（限速/电气化/轨距/股道用途）**
+
+- `data/scripts/enrich_osm_tags.py` 按正式数据的 `osm_id` 回查 Overpass API（纯标准库；内容寻址缓存可断点续跑，逐省增量产出，多端点轮换 + 指数退避 + 时间预算）。输出 `enriched/geojson/<adcode>-<省>.geojson`（原 8 字段不动，末尾追加存在的 `maxspeed/electrified/voltage/frequency/gauge/usage/service/tracks/railway:ref`）与 `enriched/provinces_index.json`（含每省标签覆盖率统计）。抓取缓存/日志不入库不进产物。
+- 运行时：`RailProperties` 增加可选原始标签字段；`RailwayRepository.loadIndex` 尝试合并增强索引（任何失败静默回退正式数据），`loadProvince` 按 **增强 FGB → 增强 GeoJSON → 正式 GeoJSON** 三级链加载，任一级失败自动降级。`config.data.enrichedRailways/flatgeobuf` 开关可整体关闭。
+- `src/data/osmTags.ts` 纯函数解析：`parseSpeedLimit` 只接受纯数字（OSM 数值即 km/h），`none` 为不限速，`variable/signals/多值` 一律"未配置"；`parseElectrified` 接受 OSM 实测的独立 `voltage/frequency` 键（如 `contact_line` + `voltage=25000` + `frequency=50`），兼容 `v=` 复合写法。
+- HUD：速度板块"限速"显示实际值/不限/未配置，超速（容差 1 km/h）时数值变红加"超速"警示（仅显示警示，不改动力学、不自动制动）；行程栏"线路"段追加"· 电气化 25kV AC 50Hz"式后缀。`session.currentSpeedLimit()/currentElectrification()` 按区段缓存。
+
+**12306 时刻表行别推定**
+
+- `data/scripts/build_timetable.py` 把 chinese-railway-gtfs（CC-BY-4.0，源自 12306 公开接口，非官方授权）的 GTFS release 转成 `enriched/timetable/trains.json`（车次 + 经停电报码序列）；上游原始 GTFS 不入库。
+- `src/data/trainDirection.ts` 按车次号数字位奇偶（双数=上行）统计相邻站对上/下行穿越证据，≥3 次且占比 ≥75% 判定主导行别；前方站对按出发方位角筛选（夹角 ≤50°）而非线投影——单条 OSM way 只有 1–2 km，相邻车站常距 5–30 km，投影必然落在端点外。
+- 始发弹窗方向按钮追加"· 上行方向/下行方向"提示；时刻表缺失或证据不足时优雅退回纯地理方位，免责文案同步更新。
+
+**纵断面持久化缓存**
+
+- IndexedDB 新增 `elevation_profiles` 对象仓库（DB 版本 1→2，upgrade 同时兼容旧 saves）。`railProfileService` 增加可选 `persist` 钩子：拟合成功即写入（含拟合参数指纹），`ensure()` 先查持久化缓存，命中直接重建内存剖面并登记节点锚点，跳过整段地形采样；指纹不匹配或读写失败一律静默重建。剖面仍是纯派生可重建数据。
+
+**FlatGeobuf 加载优化**
+
+- `data/scripts/convert_fgb.mjs` 把增强 GeoJSON 转 FGB（实测天津 2.85 MB → 1.90 MB，0.67×）。**序列化前必须按全部特征的属性键并集补 null**：flatgeobuf 列集合由特征集推导，逐特征独有的键（如后文才出现的 maxspeed）不对齐会整列丢失；转换后逐特征逐键校验。
+- `src/data/flatgeobufLoader.ts` 反序列化为与 GeoJSON 相同的 FeatureCollection 形状；`assets.ts` 新增 `fetchBinary`；RailNetwork/RailwayRepository 接受可注入 `BinaryFetcher` 便于测试。
+
+**开发工具**
+
+- `data/scripts/fetch_dem_corridor.py`：AWS Terrarium 高程瓦片（公开无密钥）纯标准库 PNG 解码，沿走廊输出"里程-高程"剖面，作为独立于 Cesium 的离线纵断面核对工具。
+
 ## 5. GitHub Pages 构建与部署
 
 1. 仓库 GitHub Settings → Pages → Source 选择 **GitHub Actions**。
@@ -370,6 +403,11 @@ Token 集中在 `src/config.ts` 的 `APP_CONFIG.cesiumIonToken`，初始化时�
 | Cesium 三维高德瓦片 | 高德瓦片按 GCJ-02 索引，直接使用标准 Web Mercator 会偏移约 500 m。必须通过 `gcj02ImageryProvider.ts` 在本地把 WGS84 输出瓦片从 GCJ-02 源瓦片重采样，不能只改 URL 或把未转换影像直接叠在 WGS84 线路上。 |
 | 三维 GCJ-02 自定义 tiling scheme | 自定义 `WebMercatorTilingScheme` 必须同时保持索引、地理矩形和原生纹理坐标一致，Cesium 内部地表渲染对不一致很敏感。本实现保留标准 scheme，只在 `gcj02ImageryProvider.ts` 中替换影像内容；不得在未做真实浏览器回归时改用自定义 tiling scheme。 |
 | 地图瓦片来源切换 | 设置变化只应调用 `CesiumMap.setMapTiles` 增删影像层；Bing 失败回退高德时要保留明确提示，切回高德时必须清除旧失败信息。地形与影像加载互相独立，影像选择不写入存档。 |
+| FlatGeobuf 列集合由特征集推导 | 增强标签是逐特征独有的，转 FGB 前必须按全部特征属性键并集补 null，否则后文才出现的键（如 maxspeed）整列丢失；`convert_fgb.mjs --verify` 逐特征逐键校验，改动序列化逻辑必须重跑校验。 |
+| OSM 标签缺失不能虚构 | 中国区 maxspeed/electrified 填充率参差：解析只接受纯数字与明确的 none/contact_line；`variable/signals/多值` 一律"未配置"，缺失区段 HUD 如实显示未配置，禁止用均值或车型推定填充。 |
+| 12306 系数据无官方许可 | 时刻表数据走"脚本进 data/scripts、派生文件入 enriched、上游原始数据不入库"模式；行别提示只写"车次奇偶统计推定，仅供参考"，不得声称真实行别或信号。 |
+| Overpass 公共实例不稳定 | 抓取脚本必须保留内容寻址缓存、多端点轮换、指数退避与时间预算；重跑脚本续抓而不是一次性加大并发；抓取期间不得并行加压同一实例。 |
+| 增强 FGB 加载失败要静默降级 | 三级加载链任一级失败自动回退下一级，不弹错误、不写存档；增强索引缺失（未生成/未部署）时保持正式数据路径。 |
 
 ## 8. 数据检查结果
 
@@ -469,6 +507,11 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - 桥隧段纵断面是节点锚点推定：双端锚点线性插值、单端锚点按入口坡度延伸，不是真实桥面标高或隧道埋深；相邻桥隧链靠 extrapolated 节点逐步解析，远端为低可信推定，后续地形拟合可升级。`extrapolated` 高程不作为地形段锚点，防止误差跨结构传播。
 - `maxGrade` 40‰ 是推定边界：真实坡度超过它的区段（缺失桥隧标注的陡地形）会被约束到上限并输出冲突报告；纵断面没有竖曲线，相邻坡度变化仍可能明显。
 - 纵断面缓存没有容量上限或内存压力回收；DEM 采样失败的区段每次 refreshSlope 重试（依赖 ElevationService 的失败重试语义）；拟合在主线程执行（有界窗口），未使用 Web Worker。纵断面不写入 V1 存档，读档/新行程按需重建。
+- neo 限速显示只是 OSM maxspeed 的直读：无方向区分（不解析 `70;80`、`forward` 等多值）、无施工临时限速、无信号系统语义；超速警示不改变动力学、不自动制动。缺失标签区段显示"未配置"，不能当作"无限速"。
+- neo 行别推定是车次奇偶的统计启发式：证据 <3 次或占比 <75% 时不提示；同一站对可能因线路曲绕选错参照站（按方位角 ±50° 筛选）；时刻表快照是生成日状态，不含临时调图。
+- neo 增强数据依赖 Overpass 抓取，OSM 数据源时间戳以 `enriched/provinces_index.json` 为准；标签可能滞后或含编辑错误，`service=yard/spur` 等股道分类仅作参考，不参与连接判定。enhanced 目录按省覆盖，未生成省份自动回退正式数据。
+- neo 纵断面持久化缓存没有总量上限，`elevation_profiles` 随驾驶范围增长；换地形/影像 provider 或拟合参数变化会因指纹不匹配整体重建，不会使用过时剖面。Terrarium/DEM 工具是地表高程（DSM），桥隧不建模，不作为动力学数据源。
+- FlatGeobuf 加载省一次 JSON.parse 与约 1/3 下载量，但仍在主线程反序列化（无 Web Worker），首启解析耗时收益以实测为准；FGB 与增强 GeoJSON 双份入库使仓库体积增大约一倍。
 
 ## 10. 后续开发流程
 

@@ -295,3 +295,33 @@ python outputs/scripts/check_datum.py       # 可选，坐标基准探测（需 
 - 线路几何：OpenStreetMap 铁路数据（按省级行政区切分，经 `CRTrainRoute-main/data/geojson/` 提供）
 - 源项目：CRTrainRoute（MIT License，见 `CRTrainRoute-main/LICENSE`）
 - OSM 数据遵循 **ODbL 1.0**，二次分发与衍生作品需保留相同许可并署名 OpenStreetMap 贡献者。
+
+---
+
+## 八、增强数据目录（data/enriched/，neo 分支）
+
+`data/enriched/` 是 neo 分支新增的**派生增强数据**目录：正式 `data/` 下任何文件不因此改动，几何与要素顺序与正式分省文件逐字节一致（仅 properties 追加字段），运行时派生区段 ID 与存档 V1 完全兼容。
+
+### 8.1 OSM 标签增强（enriched/geojson/、enriched/provinces_index.json）
+
+- 生成脚本：`data/scripts/enrich_osm_tags.py`，按正式数据中的 `osm_id` 回查 Overpass API，补齐 `maxspeed / electrified / voltage / frequency / gauge / usage / service / tracks / railway:ref` 九个键（只在原值存在时追加，不改写原 8 字段）。
+- 覆盖情况与 OSM 数据源时间戳记录在 `enriched/provinces_index.json` 的 `metadata` 与每省 `tag_coverage`。
+- 抓取缓存（`enriched/cache/`）与日志（`enriched/fetch.log`）不入库、不进构建产物。
+- 数据来源与许可：Overpass API（OpenStreetMap），ODbL 1.0，© OpenStreetMap contributors；与第三节正式数据同源同许可。
+- 已知限制：OSM 中国区 `maxspeed/electrified` 标签填充率参差，缺失区段运行时如实显示"未配置"，不做任何虚构或推断。
+
+### 8.2 FlatGeobuf 二进制副本（enriched/fgb/）
+
+- 生成脚本：`node data/scripts/convert_fgb.mjs --verify`（需 `flatgeobuf` npm 包）。
+- 序列化前按全部特征的属性键并集补 null——flatgeobuf 的列集合由特征集推导，逐特征独有的键若不对齐会整列丢失；转换后逐特征逐键校验。
+- 运行时加载链：`enriched/fgb/*.fgb` → `enriched/geojson/*` → 正式 `geojson/*`，任何一级失败自动降级（见 `src/data/railway.ts` 的 `loadProvince`）。
+
+### 8.3 时刻表派生数据（enriched/timetable/trains.json）
+
+- 生成脚本：`data/scripts/build_timetable.py`，输入为 chinese-railway-gtfs（https://github.com/wensimehrp/chinese-railway-gtfs，**CC-BY-4.0**）的 GTFS release（`output_gtfs.zip` 解压）。
+- 内容：11,854 个车次的经停电报码序列；行别不落盘，运行时按车次号数字位奇偶（双数=上行）对相邻站对做统计推定（见 `src/data/trainDirection.ts`）。
+- 许可注意：数据源自 12306 公开接口整理，**非官方授权数据集**；本仓库只提交转换后的派生文件，界面提示"仅供参考"。
+
+### 8.4 高程走廊采样工具
+
+- `data/scripts/fetch_dem_corridor.py`：AWS Terrarium 高程瓦片（公开无密钥）纯标准库 PNG 解码，沿线路走廊输出"里程-高程"剖面。地表高程（DSM，含植被/建筑），不代表铁路路基纵断面；桥隧不建模。
