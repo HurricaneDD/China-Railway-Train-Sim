@@ -110,6 +110,15 @@ export const APP_CONFIG = {
     routeHistoryLength: 2500,
     autosaveSeconds: 30,
   },
+  // 统一铁路纵断面推定参数。maxGrade 是推理边界，不是全国线路限速/限坡标准。
+  railProfile: {
+    densifyStep: 10,
+    medianHalf: 30,
+    smoothHalf: 150,
+    maxGrade: 0.04,
+    maxFillGap: 200,
+    minCoverage: 0.6,
+  },
   camera: {
     cabEyeHeight: 2.15,
     cabSeatOffset: -0.55,

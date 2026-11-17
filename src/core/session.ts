@@ -6,6 +6,7 @@ import type { GameSave, JunctionOption, JunctionRequest, LonLat, Reverser, Route
 import { bearing, compassDirection, distance, pointAt } from '../utils/geo';
 import { initialSteepGradeAssistState, initialTrainState, stepDynamics } from './dynamics';
 import { ElevationService } from './elevation';
+import { RailProfileService } from './railProfileService';
 import { railProfilePoints } from './trackProfile';
 import { saveStore } from './storage';
 import { directionalNearestStations, type DirectionalStations } from './nearbyStations';
@@ -14,6 +15,15 @@ export class GameSession {
   readonly railway = new RailwayRepository();
   readonly stations = new StationRepository();
   readonly elevation = new ElevationService();
+  /** 统一铁路纵断面：为坡度提供鲁棒推定，不可用时回退原始顶点插值。 */
+  readonly railProfile = new RailProfileService({
+    network: this.railway.network,
+    sampleTerrain: async points => {
+      await this.elevation.sample(points);
+      return points.map(point => (this.elevation.hasHeight(point) ? this.elevation.height(point) : null));
+    },
+    fit: APP_CONFIG.railProfile,
+  });
   train: TrainState = initialTrainState();
   steepGradeAssist = initialSteepGradeAssistState();
   position?: SavePosition;
@@ -607,13 +617,23 @@ export class GameSession {
     const span = Math.min(150, segment.length / 2);
     const aheadOffset = Math.max(0, Math.min(segment.length, this.position.offset + span * direction));
     const behindOffset = Math.max(0, Math.min(segment.length, this.position.offset - span * direction));
-    await this.elevation.sample(railProfilePoints(segment, Math.min(aheadOffset, behindOffset), Math.max(aheadOffset, behindOffset)));
+    // 统一纵断面可用时优先读取；桥隧锚点未就绪或采样不足时沿用原始顶点插值。
+    await this.railProfile.ensure(segment.id);
     if (generation !== this.slopeGeneration) return;
-    const ahead = this.elevation.railHeight(segment, aheadOffset);
-    const behind = this.elevation.railHeight(segment, behindOffset);
-    // Same original-vertex profile as the rail mesh; unknown samples retain the previous grade.
-    const slope = ahead !== undefined && behind !== undefined && aheadOffset !== behindOffset
-      ? (ahead - behind) / Math.abs(aheadOffset - behindOffset) : undefined;
+    const aheadProfile = this.railProfile.sampleRailProfile(segment.id, aheadOffset);
+    const behindProfile = this.railProfile.sampleRailProfile(segment.id, behindOffset);
+    let slope: number | undefined;
+    if (aheadProfile && behindProfile && aheadOffset !== behindOffset) {
+      slope = (aheadProfile.height - behindProfile.height) / Math.abs(aheadOffset - behindOffset);
+    } else {
+      await this.elevation.sample(railProfilePoints(segment, Math.min(aheadOffset, behindOffset), Math.max(aheadOffset, behindOffset)));
+      if (generation !== this.slopeGeneration) return;
+      const ahead = this.elevation.railHeight(segment, aheadOffset);
+      const behind = this.elevation.railHeight(segment, behindOffset);
+      // Same original-vertex profile as the rail mesh; unknown samples retain the previous grade.
+      slope = ahead !== undefined && behind !== undefined && aheadOffset !== behindOffset
+        ? (ahead - behind) / Math.abs(aheadOffset - behindOffset) : undefined;
+    }
     const visibleHistory = this.history.filter(point => Math.abs(point.travelled - this.routeCoordinate) < 180);
     const locations = visibleHistory.map(point => this.railway.network.nearest(point, 2));
     await this.elevation.sample(locations.flatMap(location => {

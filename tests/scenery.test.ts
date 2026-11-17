@@ -93,13 +93,14 @@ describe('沿线场景分块与轨面', () => {
     const session = new GameSession();
     session.railway.network.segments.set(segment.id, segment);
     session.position = { province: 'test', segmentId: segment.id, offset: 500, direction: 1, travelled: 0 };
-    vi.spyOn(session.elevation, 'height').mockImplementation(p => (p.lon - 118) * 10000);
+    // 夹具坡度约 21‰，低于纵断面推定上限（40‰），保证拟合保留地形证据。
+    vi.spyOn(session.elevation, 'height').mockImplementation(p => (p.lon - 118) * 2000);
     vi.spyOn(session.elevation, 'sample').mockResolvedValue([]);
     const refresh = () => (session as unknown as { refreshSlope(): Promise<void> }).refreshSlope();
-    expect(session.currentPoint()!.height).toBeCloseTo(500 / segment.cumulative[1] * 100);
+    expect(session.currentPoint()!.height).toBeCloseTo(500 / segment.cumulative[1] * 20);
     await refresh();
     const forward = session.train.slope;
-    expect(forward).toBeCloseTo(100 / segment.cumulative[1]);
+    expect(forward).toBeCloseTo(20 / segment.cumulative[1]);
     session.train.velocity = -10;
     await refresh();
     expect(session.train.slope).toBeCloseTo(forward);
