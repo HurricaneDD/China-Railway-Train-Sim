@@ -9,14 +9,14 @@ import { initialSteepGradeAssistState, initialTrainState, stepDynamics } from '.
 import { ElevationService } from './elevation';
 import { RailProfileService } from './railProfileService';
 import { railProfilePoints } from './trackProfile';
-import { saveStore } from './storage';
+import { railProfileStore, saveStore } from './storage';
 import { directionalNearestStations, type DirectionalStations } from './nearbyStations';
 
 export class GameSession {
   readonly railway = new RailwayRepository();
   readonly stations = new StationRepository();
   readonly elevation = new ElevationService();
-  /** 统一铁路纵断面：为坡度提供鲁棒推定，不可用时回退原始顶点插值。 */
+  /** 统一铁路纵断面：为坡度提供鲁棒推定，不可用时回退原始顶点插值；拟合结果持久化到 IndexedDB。 */
   readonly railProfile = new RailProfileService({
     network: this.railway.network,
     sampleTerrain: async points => {
@@ -24,6 +24,10 @@ export class GameSession {
       return points.map(point => (this.elevation.hasHeight(point) ? this.elevation.height(point) : null));
     },
     fit: APP_CONFIG.railProfile,
+    persist: {
+      load: (segmentId) => railProfileStore.get(segmentId) ?? null,
+      save: (profile) => railProfileStore.put(profile),
+    },
   });
   train: TrainState = initialTrainState();
   steepGradeAssist = initialSteepGradeAssistState();

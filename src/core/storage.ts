@@ -1,32 +1,37 @@
 import { DEFAULT_SETTINGS, type GameSettings } from '../config';
 import { isMapTileId } from '../map/basemap';
+import type { HeightConfidence } from './railProfile';
 import type { GameSave } from '../types';
 
 const DB_NAME = 'china-railway-train-sim';
 const STORE = 'saves';
+/** 派生纵断面缓存（neo）：纯派生数据，可随时重建，与存档数据完全隔离。 */
+const PROFILE_STORE = 'elevation_profiles';
 const SETTINGS_KEY = 'crts-settings';
+const DB_VERSION = 2;
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE, { keyPath: 'id' });
+      if (!request.result.objectStoreNames.contains(PROFILE_STORE)) request.result.createObjectStore(PROFILE_STORE, { keyPath: 'segmentId' });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 
-async function transaction<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+async function transaction<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) => IDBRequest<T>, storeName: string = STORE): Promise<T> {
   const db = await openDatabase();
   try {
     return await new Promise<T>((resolve, reject) => {
-      const tx = db.transaction(STORE, mode);
+      const tx = db.transaction(storeName, mode);
       let result: T;
       tx.oncomplete = () => resolve(result);
       tx.onabort = () => reject(tx.error ?? new Error('存档事务已中止，未写入完成'));
       tx.onerror = () => reject(tx.error ?? new Error('存档事务失败'));
-      const request = action(tx.objectStore(STORE));
+      const request = action(tx.objectStore(storeName));
       request.onsuccess = () => { result = request.result; };
       request.onerror = () => reject(request.error);
     });
@@ -66,6 +71,32 @@ export const saveStore = {
   },
   async latest(): Promise<GameSave | undefined> {
     return (await this.list())[0];
+  },
+};
+
+/** 持久化纵断面记录：拟合参数指纹不匹配时由调用方丢弃重建。 */
+export interface PersistedRailProfile {
+  segmentId: string;
+  samples: Array<{ s: number; h: number }>;
+  confidence: HeightConfidence;
+  coverage: number;
+  maxAbsGrade: number;
+  fitFingerprint: string;
+  savedAt: string;
+}
+
+export const railProfileStore = {
+  async get(segmentId: string): Promise<PersistedRailProfile | undefined> {
+    if (typeof indexedDB === 'undefined') return undefined;
+    return transaction<PersistedRailProfile | undefined>('readonly', (store) => store.get(segmentId) as IDBRequest<PersistedRailProfile | undefined>, PROFILE_STORE);
+  },
+  async put(profile: PersistedRailProfile): Promise<void> {
+    if (typeof indexedDB === 'undefined') return;
+    await transaction('readwrite', (store) => store.put(profile), PROFILE_STORE);
+  },
+  async clearAll(): Promise<void> {
+    if (typeof indexedDB === 'undefined') return;
+    await transaction('readwrite', (store) => store.clear(), PROFILE_STORE);
   },
 };
 
