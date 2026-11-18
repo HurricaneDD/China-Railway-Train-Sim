@@ -101,11 +101,22 @@ select { min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-
 .panel-footer { display: flex; align-items: center; gap: 8px; padding: 16px 28px; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; }
 .map-picker { overflow-y: auto; }
 .form-label { color: var(--muted); font-size: 10px; letter-spacing: 1px; }
+/* 两步新游戏流程：第一步整幅省份网格，第二步省份预览条 + 省内检索。 */
+.province-step { display: flex; flex-direction: column; }
+.province-step .form-label { flex-shrink: 0; }
 .province-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; max-height: 300px; margin: 14px 0 22px; overflow-y: auto; }
+.province-grid.tall { flex: 1; min-height: 0; max-height: none; margin: 12px 0 16px; }
 .province-grid button { padding: 10px 3px; border: 1px solid var(--line); background: #1b1f1b; }
 .province-grid button strong { display: block; font-size: 11px; font-weight: 500; }
 .province-grid button small { display: block; margin-top: 4px; color: #727a6f; font-family: 'Barlow Condensed', sans-serif; font-size: 8px; }
+.province-grid button:not(:disabled):hover { border-color: rgba(216,255,98,.55); background: rgba(216,255,98,.06); }
 .province-grid button.active { border-color: var(--accent); color: var(--accent); background: rgba(216,255,98,.07); }
+.province-bar { display: flex; align-items: center; gap: 10px; margin: 0 28px; padding: 14px 0 16px; border-bottom: 1px solid var(--line); }
+.province-bar > span { flex-shrink: 0; color: var(--muted); font-size: 10px; letter-spacing: 1px; }
+.province-bar strong { color: var(--accent); font-size: 15px; letter-spacing: -.3px; }
+.province-bar small { flex: 1; min-width: 0; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.province-bar .text-button { display: inline-flex; flex-shrink: 0; gap: 4px; margin: 0 0 0 auto; padding: 4px 0; font-size: 12px; }
+.filter-row.single { grid-template-columns: 1fr; }
 .map-instruction { display: flex; gap: 13px; margin-bottom: 18px; padding: 15px; border: 1px solid var(--line); }
 .map-instruction.ready { border-color: rgba(216,255,98,.3); }
 .step-number { color: var(--accent); font-family: 'Barlow Condensed', sans-serif; font-size: 12px; }
@@ -328,6 +339,7 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
   .panel-header { padding: 22px; }
   .panel-body { padding: 18px 22px; }
   .tabs { margin: 0 22px; }
+  .province-bar { margin: 0 22px; }
   .map-select-banner { top: auto; right: 15px; bottom: 18px; left: 15px; transform: none; }
   .modal-backdrop { padding: 10px; }
   .save-actions { flex-direction: column; align-items: stretch; padding: 0 18px 16px; }

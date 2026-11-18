@@ -37,7 +37,7 @@ export const APP_CONFIG = {
     fontSize: 13,
     labelHeight: 20,
     labelOffsetY: 12,
-    /** 站点显示高度（米，椭球高）；同时供标签屏幕投影使用。 */
+    /** 站点显示高度（米，相对地形表面）；同时供标签屏幕投影使用。 */
     markerHeight: 30,
   },
   track: {

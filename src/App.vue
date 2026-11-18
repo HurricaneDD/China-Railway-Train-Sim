@@ -138,20 +138,39 @@ async function newGame(): Promise<void> {
   selectingMap.value = false;
   showHelp.value = false;
   screen.value = 'new';
-  await selectProvince(selectedProvince.value || '江苏省');
+  // 开始游戏先进入省份选择，不再默认加载任何省份；选中后才进入该省地图预览。
+  resetProvinceView();
+}
+
+/** 回到省份选择步骤：清理上一省的预览图、车站圆点和地图点选回调，恢复全国视角。 */
+function resetProvinceView(): void {
+  selectedProvince.value = '';
+  selectingMap.value = false;
+  map.value?.setPicking();
+  map.value?.clearStations();
+  map.value?.clearRailway();
+  map.value?.flyTo({ lon: 108, lat: 34 }, 10_500_000);
+}
+
+/** 预览面板“更换省份”按钮：退回第一步重新点选省份。 */
+function resetProvince(): void {
+  if (busy.value) return;
+  resetProvinceView();
 }
 
 async function selectProvince(name: string): Promise<void> {
-  if (busy.value) return;
-  selectedProvince.value = name;
-  selectingMap.value = false;
+  if (busy.value || !name) return;
   busy.value = true;
   try {
     await session.railway.load(name);
+    // 数据加载成功后才切换到预览步骤；失败时停留在省份选择，便于重试。
+    selectedProvince.value = name;
+    selectingMap.value = false;
     const provinceStations = session.stations.stations.filter((station) => station.province === name);
     map.value?.showStations(provinceStations);
     const segments = [...session.railway.network.segments.values()].filter((segment) => segment.properties.province === name);
     map.value?.showProvinceRailway(segments);
+    armProvincePicking();
     if (!provinceStations.length) {
       notify('该省份没有带坐标车站，可在已有线路区域直接选点');
     }
@@ -162,17 +181,25 @@ async function selectProvince(name: string): Promise<void> {
   }
 }
 
-function enableMapSelection(): void {
-  selectingMap.value = true;
+/** 省份预览期间地图点选保持可用：点铁路附近位置吸附出发，点车站圆点打开车站线路图。 */
+function armProvincePicking(): void {
+  if (screen.value !== 'new' || !selectedProvince.value) return;
   map.value?.setPicking(startMapLocation, (code) => {
     const station = session.stations.byCode(code);
     if (station) void startStation(station);
   });
+}
+
+function enableMapSelection(): void {
+  if (!selectedProvince.value || busy.value) return;
+  selectingMap.value = true;
+  armProvincePicking();
   notify('请点击地图上的铁路附近位置');
 }
 
 async function startMapLocation(point: LonLat): Promise<void> {
-  if (!selectingMap.value || !selectedProvince.value || busy.value) return;
+  // 省份预览（面板或全屏选点横幅）中点击地图均可吸附出发；驾驶与菜单阶段忽略。
+  if (screen.value !== 'new' || !selectedProvince.value || busy.value) return;
   busy.value = true;
   try {
     const snapped = await session.startAt(selectedProvince.value, point, APP_CONFIG.data.mapSnapDistance);
@@ -194,16 +221,25 @@ async function startStation(station: Station): Promise<void> {
     const snapshot = buildStationDeparture(session.railway.network, station);
     if (!snapshot.lines.length) {
       notify(`${station.name}站周边没有可识别的国铁线路，请改用地图选点`, true);
+      armProvincePicking();
       return;
     }
     selectingMap.value = false;
+    // 车站线路图打开期间暂停地图点选，关闭后由 closeDeparture 重新启用。
     map.value?.setPicking();
     departure.value = snapshot;
   } catch (error) {
     notify(error instanceof Error ? error.message : '车站线路图读取失败', true);
+    armProvincePicking();
   } finally {
     busy.value = false;
   }
+}
+
+/** 关闭车站线路图后回到省份预览，恢复地图点选与车站圆点点击。 */
+function closeDeparture(): void {
+  departure.value = null;
+  armProvincePicking();
 }
 
 async function departFromStation(payload: { line: StationDepartureLine; direction: 1 | -1 }): Promise<void> {
@@ -431,11 +467,11 @@ async function retryData(): Promise<void> {
     <StartMenu v-if="screen === 'menu'" :has-save="hasSave" :ready="ready" :background-hint="backgroundHint" @continue="continueGame" @new="newGame" @saves="openOverlay('saves')" @settings="openOverlay('settings')" />
     <div v-else-if="screen === 'new'" class="workspace">
 
-      <NewGamePanel v-if="!selectingMap" :stations="session.stations" :provinces="session.railway.provinces" :selected-province="selectedProvince" :busy="busy" @close="screen = 'menu'" @province="selectProvince" @station="startStation" @location="enableMapSelection" />
-      <div v-if="selectingMap" class="map-select-banner"><span class="pulse" />地图选点已启用 · 点击铁路附近位置<button @click="selectingMap = false; map?.setPicking()">返回选站</button></div>
+      <NewGamePanel v-if="!selectingMap" :stations="session.stations" :provinces="session.railway.provinces" :selected-province="selectedProvince" :busy="busy" @close="screen = 'menu'" @province="selectProvince" @reset-province="resetProvince" @station="startStation" @location="enableMapSelection" />
+      <div v-if="selectingMap" class="map-select-banner"><span class="pulse" />地图选点已启用 · 点击铁路附近位置或车站圆点<button @click="selectingMap = false">返回省份预览</button></div>
     </div>
     <DrivingHud v-else :session="session" :update-key="updateKey" :camera-range="settings.cameraRange" :camera-mode="cameraMode" :paused="userPaused" @view="setCameraMode" @pause="userPaused = !userPaused" @help="showHelp = true" @parking="session.toggleParkingBrake()" @retry="session.retryBorder()" @menu="returnMenu" @save="quickSave" @saves="openOverlay('saves')" @settings="openOverlay('settings')" @reverser="changeReverser" @horn="(held) => held ? horn.start() : horn.stop()" @sand="triggerSand" @camera="(range) => { map?.setCameraRange(range); settings.cameraRange = Math.max(35, Math.min(900, range)); }" @speed="session.setSimulationSpeed($event)" />
-    <StationDepartureDialog v-if="departure" :departure="departure" :busy="busy" @close="departure = null" @depart="departFromStation" />
+    <StationDepartureDialog v-if="departure" :departure="departure" :busy="busy" @close="closeDeparture" @depart="departFromStation" />
     <JunctionDialog v-if="session.junction && !showHelp && !userPaused && !overlay" :junction="session.junction" @choose="(id) => session.chooseJunction(id)" />
     <div v-if="screen === 'driving' && showHelp" class="modal-backdrop">
       <section class="panel help-panel" role="dialog" aria-modal="true" aria-labelledby="help-title">
