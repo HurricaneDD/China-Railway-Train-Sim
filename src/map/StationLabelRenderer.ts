@@ -1,6 +1,6 @@
 import {
-  Cartesian2, Cartesian3, Color, ConstantProperty, DistanceDisplayCondition, LabelStyle, NearFarScalar,
-  SceneTransforms, VerticalOrigin, type Entity, type Viewer,
+  Cartesian2, Cartesian3, Cartographic, Color, ConstantProperty, DistanceDisplayCondition, HeightReference,
+  LabelStyle, NearFarScalar, SceneTransforms, VerticalOrigin, type Entity, type Viewer,
 } from 'cesium';
 import { APP_CONFIG } from '../config';
 import type { LonLat, Station } from '../types';
@@ -12,8 +12,12 @@ type StationLabelMode = 'none' | 'overview' | 'driving';
 interface DisplayStation {
   station: Station;
   entity: Entity;
-  /** Fixed ellipsoid position used for both the Cesium entity and screen projection. */
-  world: Cartesian3;
+  /**
+   * WGS84 station anchor. The entity renders at `markerHeight` above the
+   * terrain surface (HeightReference.RELATIVE_TO_GROUND); screen projection
+   * re-applies the currently loaded terrain height at this anchor.
+   */
+  anchor: Cartographic;
   text: string;
 }
 
@@ -25,6 +29,7 @@ const LABEL_BACKGROUND = Color.fromCssColorString('#07100a').withAlpha(0.82);
 
 const scratchToStation = new Cartesian3();
 const scratchScreen = new Cartesian2();
+const scratchWorld = new Cartesian3();
 
 /**
  * Draws station dots and floating station-name labels on the 3D map.
@@ -125,16 +130,19 @@ export class StationLabelRenderer {
   private addStation(station: Station, mode: Exclude<StationLabelMode, 'none'>): void {
     const config = APP_CONFIG.stationLabels;
     const text = stationLabelText(station.name);
-    const world = Cartesian3.fromDegrees(station.longitude, station.latitude, config.markerHeight);
+    // RELATIVE_TO_GROUND keeps the marker at markerHeight above the terrain
+    // surface, so high-altitude stations no longer sink below the globe.
+    const anchor = Cartographic.fromDegrees(station.longitude, station.latitude);
     const entity = this.viewer.entities.add({
       id: `station-${station.telecode}`,
       name: station.full_name,
-      position: world,
+      position: Cartesian3.fromRadians(anchor.longitude, anchor.latitude, config.markerHeight),
       point: {
         pixelSize: 7,
         color: ACCENT,
         outlineColor: POINT_OUTLINE,
         outlineWidth: 2,
+        heightReference: HeightReference.RELATIVE_TO_GROUND,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
         ...(mode === 'driving' ? {
           // Keep dots and labels in the same display band; the larger render
@@ -155,6 +163,7 @@ export class StationLabelRenderer {
         verticalOrigin: VerticalOrigin.BOTTOM,
         pixelOffset: new Cartesian2(0, -config.labelOffsetY),
         show: false,
+        heightReference: HeightReference.RELATIVE_TO_GROUND,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
         ...(mode === 'driving' ? {
           distanceDisplayCondition: new DistanceDisplayCondition(0, config.displayDistance),
@@ -163,7 +172,7 @@ export class StationLabelRenderer {
         } : {}),
       },
     });
-    this.entities.set(station.telecode, { station, entity, world, text });
+    this.entities.set(station.telecode, { station, entity, anchor, text });
   }
 
   private removeAll(): void {
@@ -185,11 +194,18 @@ export class StationLabelRenderer {
     const config = APP_CONFIG.stationLabels;
     const candidates: StationScreenLabel[] = [];
     for (const [telecode, item] of this.entities) {
-      const cameraDistance = Cartesian3.distance(camera.positionWC, item.world);
+      // Mirror the RELATIVE_TO_GROUND rendering height with the terrain tiles
+      // that are currently loaded; falls back to the ellipsoid when unloaded.
+      const terrainHeight = scene.globe.getHeight(item.anchor) ?? 0;
+      const world = Cartesian3.fromRadians(
+        item.anchor.longitude, item.anchor.latitude,
+        terrainHeight + config.markerHeight, scene.globe.ellipsoid, scratchWorld,
+      );
+      const cameraDistance = Cartesian3.distance(camera.positionWC, world);
       if (this.mode === 'driving' && cameraDistance > config.displayDistance) continue;
-      const toStation = Cartesian3.subtract(item.world, camera.positionWC, scratchToStation);
+      const toStation = Cartesian3.subtract(world, camera.positionWC, scratchToStation);
       if (Cartesian3.dot(toStation, camera.directionWC) <= 0) continue;
-      const screen = SceneTransforms.worldToWindowCoordinates(scene, item.world, scratchScreen);
+      const screen = SceneTransforms.worldToWindowCoordinates(scene, world, scratchScreen);
       if (!screen) continue;
       const priority = this.mode === 'driving'
         ? cameraDistance

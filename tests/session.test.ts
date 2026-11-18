@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GameSession } from '../src/core/session';
 import { APP_CONFIG } from '../src/config';
 import { distance } from '../src/utils/geo';
-import type { LonLat, RailSegment } from '../src/types';
+import type { LonLat, RailSegment, Station } from '../src/types';
+import { initialSteepGradeAssistState } from '../src/core/dynamics';
+import { validateGameSave } from '../src/core/storage';
 
 // Deterministic geometry fixtures, not evidence of real-world route availability.
 function sessionOnLine(length = 3000, split = 1000, initialize = true) {
@@ -34,6 +36,57 @@ function sessionOnLine(length = 3000, split = 1000, initialize = true) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('驾驶与编组', () => {
+  it('默认辅助接入会话，驻车和制动输入在下一物理步优先撤销', () => {
+    const { session, internals } = sessionOnLine();
+    session.train.throttle = 100;
+    session.train.slope = 0.18;
+    internals.tick(1 / 60);
+    expect(session.steepGradeAssist.force).toBe(0);
+    session.parkingBrake = false;
+    session.train.brakeActual = session.train.brakeCommand = 0;
+    internals.tick(1 / 60);
+    expect(session.steepGradeAssist.force).toBeGreaterThan(0);
+    session.brakeHeld = true;
+    internals.tick(1 / 60);
+    expect(session.steepGradeAssist).toEqual(initialSteepGradeAssistState());
+    session.brakeHeld = false;
+    session.train.brakeActual = session.train.brakeCommand = 0;
+    internals.tick(1 / 60);
+    expect(session.steepGradeAssist.force).toBeGreaterThan(0);
+    session.parkingBrake = true;
+    internals.tick(1 / 60);
+    expect(session.steepGradeAssist.force).toBe(0);
+  });
+
+  it('辅助不写入V1存档，新行程、读档和实际换向重置运行状态', async () => {
+    vi.stubGlobal('requestAnimationFrame', () => 1);
+    vi.stubGlobal('cancelAnimationFrame', () => {});
+    const { session, internals } = sessionOnLine();
+    vi.spyOn(internals, 'refreshSlope').mockResolvedValue();
+    vi.spyOn(session as unknown as { loadNearbyProvinces(): Promise<void> }, 'loadNearbyProvinces').mockResolvedValue();
+    vi.spyOn(session.railway, 'load').mockResolvedValue();
+    session.parkingBrake = false;
+    session.train.throttle = 100;
+    session.train.slope = 0.18;
+    internals.tick(1 / 60);
+    const save = JSON.parse(JSON.stringify(session.createSave('辅助中')));
+    expect(validateGameSave(save)).toBe(true);
+    expect(save.version).toBe(1);
+    expect(save).not.toHaveProperty('steepGradeAssist');
+    expect(save.train).not.toHaveProperty('steepGradeAssist');
+    expect(session.setReverser(-1)).toBe(true);
+    expect(session.steepGradeAssist).toEqual(initialSteepGradeAssistState());
+    Object.assign(session.steepGradeAssist, { active: true, direction: -1, sufficientTime: 0.5, force: 300_000 });
+    await session.restore(save);
+    expect(session.steepGradeAssist).toEqual(initialSteepGradeAssistState());
+    internals.tick(1 / 60);
+    expect(session.steepGradeAssist.force).toBeGreaterThan(0);
+    session.startOnTrack('320000:1:0', 200, 1);
+    expect(session.steepGradeAssist).toEqual(initialSteepGradeAssistState());
+    expect(session.parkingBrake).toBe(true);
+    session.stop();
+  });
+
   it('靠近唯一的桥隧推定连接时显示提醒，驶过后清除', () => {
     const { session, internals } = sessionOnLine();
     const next = session.railway.network.segments.get('320000:2:0')!;
@@ -196,5 +249,50 @@ describe('人工检查倍速', () => {
     expect(session.elapsed).toBeCloseTo(50, 1);
     session.stop();
     now.mockRestore();
+  });
+});
+
+
+describe('方向最近站缓存', () => {
+  it('每真实秒最多重算一次，倍速不加频；倒滑和停车使用实际运动方向', () => {
+    const { session, internals } = sessionOnLine();
+    session.stations.stations = [
+      { name: '后站', longitude: 118, latitude: 0 },
+      { name: '前站', longitude: 118.025, latitude: 0 },
+    ] as Station[];
+    let now = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    try {
+      const first = session.nearbyStations;
+      expect(first.next?.name).toBe('前站');
+      session.simulationSpeed = 50;
+      session.train.velocity = -1;
+      internals.tick(1 / 60);
+      now = 999;
+      expect(session.nearbyStations).toBe(first);
+      now = 1000;
+      expect(session.nearbyStations.next?.name).toBe('后站');
+      session.train.velocity = 0;
+      now = 2000;
+      expect(session.nearbyStations.next?.name).toBe('后站');
+      expect(session.setReverser(1)).toBe(true);
+      expect(session.nearbyStations.next?.name).toBe('前站');
+    } finally { clock.mockRestore(); }
+  });
+  it('新行程和读档立即清理前一位置的缓存', async () => {
+    vi.stubGlobal('requestAnimationFrame', () => 1);
+    vi.stubGlobal('cancelAnimationFrame', () => {});
+    const { session, internals } = sessionOnLine();
+    vi.spyOn(internals, 'refreshSlope').mockResolvedValue();
+    vi.spyOn(session as unknown as { loadNearbyProvinces(): Promise<void> }, 'loadNearbyProvinces').mockResolvedValue();
+    vi.spyOn(session.railway, 'load').mockResolvedValue();
+    session.stations.stations = [{ name: '中间站', longitude: 118.015, latitude: 0 }] as Station[];
+    expect(session.nearbyStations.next?.name).toBe('中间站');
+    const save = session.createSave('缓存测试');
+    session.startOnTrack('320000:2:0', 100, 1);
+    expect(session.nearbyStations.previous?.name).toBe('中间站');
+    await session.restore(save);
+    expect(session.nearbyStations.next?.name).toBe('中间站');
+    session.stop();
   });
 });

@@ -8,11 +8,13 @@ import { APP_CONFIG } from '../config';
 import type { GameSession } from '../core/session';
 import type { CameraMode, LonLat, RailSegment, Station } from '../types';
 import { BASEMAPS, DEFAULT_MAP_TILES, type MapTileId } from './basemap';
-import { fixedCameraFov, fixedCameraPose } from './cameraPose';
+import { cabCameraFov, cabCameraPose, defaultFixedCameraView, fixedCameraFov, fixedCameraPose, rotateFixedCamera, zoomFixedCamera } from './cameraPose';
 import { createGcj02ImageryProvider } from './gcj02ImageryProvider';
 import { RailRenderer } from './RailRenderer';
+import { SceneryManager } from './SceneryManager';
 import { StationLabelRenderer } from './StationLabelRenderer';
 import { TrainRenderer } from './TrainRenderer';
+import { CabRenderer } from './CabRenderer';
 import { offsetPoint } from '../utils/geo';
 import { withTimeout } from '../utils/assets';
 
@@ -30,8 +32,11 @@ export class CesiumMap {
   private tileGeneration = 0;
   private tileLoadFailed = false;
   private railRenderer!: RailRenderer;
+  private scenery!: SceneryManager;
+  private sceneryCheckTime = 0;
   private provinceRailway?: GroundPolylinePrimitive;
   private trainRenderer!: TrainRenderer;
+  private cabRenderer!: CabRenderer;
   private stationLabels!: StationLabelRenderer;
   private handler?: ScreenSpaceEventHandler;
   private session?: GameSession;
@@ -39,9 +44,12 @@ export class CesiumMap {
   private cameraRange: number = APP_CONFIG.camera.range;
   private cameraRangeDirty = true;
   private cameraMode: CameraMode = 'cab';
+  private fixedView = defaultFixedCameraView();
+  private fixedDragging = false;
+  private stopFixedDrag = (): void => { this.fixedDragging = false; };
   private defaultFov = Math.PI / 3;
   private cabHeading?: number;
-  private animationFrame = 0;
+  private removeBeforeUpdate?: () => void;
   private previousTime = 0;
   private downPosition?: Cartesian2;
   private pickLocation?: (point: LonLat) => void;
@@ -61,6 +69,8 @@ export class CesiumMap {
       infoBox: false,
       navigationHelpButton: false,
       sceneModePicker: false,
+      // Train-local moving geometry must not be projected as ECEF for unused 2D/Columbus modes.
+      scene3DOnly: true,
       selectionIndicator: false,
       timeline: false,
       requestRenderMode: false,
@@ -76,7 +86,9 @@ export class CesiumMap {
     if (initialFrustum instanceof PerspectiveFrustum) this.defaultFov = (initialFrustum as PerspectiveFrustum).fov ?? this.defaultFov;
     this.viewer.cesiumWidget.creditContainer.setAttribute('style', 'font-size:10px;opacity:.65');
     this.railRenderer = new RailRenderer(this.viewer, this.session!.elevation);
+    this.scenery = new SceneryManager(this.viewer, this.session!.elevation);
     this.trainRenderer = new TrainRenderer(this.viewer);
+    this.cabRenderer = new CabRenderer(this.viewer);
     this.stationLabels = new StationLabelRenderer(this.viewer);
     // Apply the selected raster source before the first visible frame; AMap
     // needs no ion round-trip and starts loading immediately.
@@ -87,7 +99,8 @@ export class CesiumMap {
       this.onError?.('三维画面暂时中断，列车已暂停。请重试地图服务后继续驾驶。');
     });
     this.previousTime = performance.now();
-    this.animate();
+    // Update the eye and train-local cockpit before Cesium derives this frame's culling volumes.
+    this.removeBeforeUpdate = this.viewer.scene.preUpdate.addEventListener(this.animate);
     void this.retryServices();
   }
 
@@ -231,6 +244,7 @@ export class CesiumMap {
   // Overview uses the original WGS84 vertices, with no straight-line joins between parts.
   showProvinceRailway(segments: RailSegment[]): void {
     this.clearProvinceRailway();
+    this.scenery.clear();
     this.railRenderer.clear();
     if (!segments.length) return;
     let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity;
@@ -262,6 +276,7 @@ export class CesiumMap {
 
   clearRailway(): void {
     this.clearProvinceRailway();
+    this.scenery.clear();
     this.railRenderer.clear();
   }
 
@@ -292,6 +307,8 @@ export class CesiumMap {
   }
 
   setCameraMode(mode: CameraMode): void {
+    if (mode === 'fixed' && this.cameraMode !== mode) this.fixedView = defaultFixedCameraView();
+    this.stopFixedDrag();
     this.cameraMode = mode;
     this.cameraTarget = undefined;
     this.cabHeading = undefined;
@@ -299,6 +316,10 @@ export class CesiumMap {
     this.viewer.camera.lookAtTransform(Matrix4.IDENTITY);
     // 固定视角会为取景放宽视场，切回驾驶室/自由视角时恢复默认镜头。
     if (mode !== 'fixed') this.applyFov(this.defaultFov);
+    if (mode !== 'cab') {
+      this.cabRenderer?.hide();
+      if (this.viewer.camera.frustum instanceof PerspectiveFrustum) this.viewer.camera.frustum.near = 1;
+    }
   }
 
   destroy(): void {
@@ -306,20 +327,36 @@ export class CesiumMap {
     this.serviceGeneration++;
     this.tileGeneration++;
     this.tileLayers = [];
-    cancelAnimationFrame(this.animationFrame);
+    this.removeBeforeUpdate?.();
     this.removeRenderError?.();
     if (this.viewer && !this.viewer.isDestroyed()) {
       this.stationLabels?.clear();
       this.railRenderer?.clear();
+      this.scenery?.clear();
+      this.cabRenderer?.destroy();
       this.clearProvinceRailway();
     }
+    window.removeEventListener('blur', this.stopFixedDrag);
     this.handler?.destroy();
     if (this.viewer && !this.viewer.isDestroyed()) this.viewer.destroy();
   }
 
   private setupPicking(): void {
     this.handler = new ScreenSpaceEventHandler(this.viewer.scene.canvas);
-    this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => { this.downPosition = event.position; }, ScreenSpaceEventType.LEFT_DOWN);
+    window.addEventListener('blur', this.stopFixedDrag);
+    // Cesium maps a single touch to LEFT_DOWN / MOUSE_MOVE / LEFT_UP, including cancellation.
+    this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
+      this.downPosition = Cartesian2.clone(event.position);
+      this.fixedDragging = this.cameraMode === 'fixed' && !!this.session?.running;
+    }, ScreenSpaceEventType.LEFT_DOWN);
+    this.handler.setInputAction(this.stopFixedDrag, ScreenSpaceEventType.LEFT_UP);
+    this.handler.setInputAction((event: ScreenSpaceEventHandler.MotionEvent) => {
+      if (!this.fixedDragging || this.cameraMode !== 'fixed' || !this.session?.running) return;
+      rotateFixedCamera(this.fixedView, event.endPosition.x - event.startPosition.x, event.endPosition.y - event.startPosition.y);
+    }, ScreenSpaceEventType.MOUSE_MOVE);
+    this.handler.setInputAction((delta: number) => {
+      if (this.cameraMode === 'fixed' && this.session?.running) zoomFixedCamera(this.fixedView, delta);
+    }, ScreenSpaceEventType.WHEEL);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
       if (!this.downPosition || Cartesian2.distance(this.downPosition, event.position) > 5) return;
       const picked = this.viewer.scene.pick(event.position);
@@ -346,8 +383,18 @@ export class CesiumMap {
     if (this.session?.running) {
       const points = this.session.consistPoints();
       stationCenter = points[0];
+      if (stationCenter && now - this.sceneryCheckTime >= 250) {
+        this.sceneryCheckTime = now;
+        const network = this.session.railway.network;
+        const preferred = this.session.position?.segmentId;
+        if (this.scenery.needsUpdate(stationCenter, preferred, network.segments.size, now)) {
+          const segments = network.segmentsNear(stationCenter, APP_CONFIG.scenery.radius + APP_CONFIG.scenery.chunkLength, 120, preferred);
+          void this.scenery.update(segments, stationCenter, preferred, network.segments.size);
+        }
+      }
       const inCab = this.cameraMode === 'cab';
-      // 只有“第三人称自由”允许玩家旋转/缩放；固定视角和驾驶室每帧重置相机。
+      if (!inCab) this.cabRenderer.hide();
+      // 自由视角使用 Cesium 控制器；固定视角用独立拖动/滚轮状态随车重建相机。
       this.viewer.scene.screenSpaceCameraController.enableInputs = this.cameraMode === 'free';
       this.trainRenderer.update(inCab ? [] : points);
       if (points[0]) {
@@ -361,11 +408,11 @@ export class CesiumMap {
       this.cameraTarget = undefined;
       this.cabHeading = undefined;
       this.trainRenderer.update([]);
+      this.cabRenderer.hide();
     }
     // Driving station dots/labels are bounded by APP_CONFIG.stationLabels and
     // rebuilt only after the train has moved far enough.
     this.stationLabels?.update(now, stationCenter, this.session?.stations.stations ?? []);
-    this.animationFrame = requestAnimationFrame(this.animate);
   };
 
   private driveFromCab(lon: number, lat: number, height: number, heading: number, dt: number): void {
@@ -375,20 +422,23 @@ export class CesiumMap {
       const difference = Math.atan2(Math.sin(desired - this.cabHeading), Math.cos(desired - this.cabHeading));
       this.cabHeading += difference * (1 - Math.exp(-APP_CONFIG.camera.cabHeadingSmoothing * dt));
     }
-    // Place the eye near the front of the locomotive, looking down the track.
-    const eye = offsetPoint({ lon, lat }, heading - 90, APP_CONFIG.camera.cabForwardOffset);
-    const ground = this.viewer.scene.globe.getHeight(Cartographic.fromDegrees(eye.lon, eye.lat));
+    // Camera and interior share one smoothed body frame, including grade and the seat's offset.
+    const eye = cabCameraPose({ lon, lat, height }, this.cabHeading * 180 / Math.PI, this.session?.train.slope ?? 0);
+    const canvas = this.viewer.scene.canvas;
+    this.applyFov(cabCameraFov(canvas.clientWidth, canvas.clientHeight));
+    if (this.viewer.camera.frustum instanceof PerspectiveFrustum) this.viewer.camera.frustum.near = APP_CONFIG.camera.cabNear;
+    if (this.session) this.cabRenderer.update(eye.frame, this.session.train, this.session.elapsed, performance.now());
     this.viewer.camera.lookAtTransform(Matrix4.IDENTITY);
     this.viewer.camera.setView({
-      destination: Cartesian3.fromDegrees(eye.lon, eye.lat, Math.max(height, ground ?? height) + APP_CONFIG.track.heightOffset + APP_CONFIG.camera.cabEyeHeight),
-      orientation: { heading: this.cabHeading, pitch: APP_CONFIG.camera.cabPitch, roll: 0 },
+      destination: eye.position,
+      orientation: { direction: eye.direction, up: eye.up },
     });
   }
 
   private followFixed(lon: number, lat: number, height: number, heading: number): void {
     const canvas = this.viewer.scene.canvas;
     this.applyFov(fixedCameraFov(canvas.clientWidth, canvas.clientHeight));
-    const pose = fixedCameraPose({ lon, lat, height }, heading);
+    const pose = fixedCameraPose({ lon, lat, height }, heading, this.fixedView);
     this.viewer.camera.lookAtTransform(Matrix4.IDENTITY);
     this.viewer.camera.setView({
       destination: Cartesian3.fromDegrees(pose.lon, pose.lat, pose.altitude),

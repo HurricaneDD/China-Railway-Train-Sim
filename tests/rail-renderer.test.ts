@@ -40,7 +40,7 @@ describe('轨道异步替换', () => {
     expect([...primitives]).toEqual(old);
     resolve([]);
     await second;
-    expect(primitives.size).toBe(3);
+    expect(primitives.size).toBe(2);
     expect(old.every(p => !primitives.has(p))).toBe(true);
   });
 

@@ -37,7 +37,7 @@ export const APP_CONFIG = {
     fontSize: 13,
     labelHeight: 20,
     labelOffsetY: 12,
-    /** 站点显示高度（米，椭球高）；同时供标签屏幕投影使用。 */
+    /** 站点显示高度（米，相对地形表面）；同时供标签屏幕投影使用。 */
     markerHeight: 30,
   },
   track: {
@@ -46,6 +46,15 @@ export const APP_CONFIG = {
     sleeperLength: 2.6,
     heightOffset: 1.2,
     elevationSampleSpacing: 120,
+  },
+  scenery: {
+    chunkLength: 250,
+    radius: 1100,
+    refreshDistance: 120,
+    maxChunks: 48,
+    sleeperSpacing: 0.72,
+    sampleSpacing: 8,
+    retryMs: 5000,
   },
   train: {
     locomotive: { length: 20, width: 3.3, height: 4.7, mass: 138_000 },
@@ -68,6 +77,18 @@ export const APP_CONFIG = {
     brakeApplySeconds: 4,
     brakeReleaseSeconds: 4,
     reverseThresholdKmh: 0.5,
+    steepGradeAssist: {
+      enabled: true,
+      minSlope: 0.06,
+      minThrottle: 80,
+      maxBrakeActual: 0.1,
+      activationSpeedKmh: 8,
+      taperStartKmh: 12,
+      crawlSpeedKmh: 15,
+      targetAcceleration: 0.15,
+      maxTotalForce: 750_000,
+      exitSeconds: 1,
+    },
   },
   simulation: {
     fixedStep: 1 / 60,
@@ -90,9 +111,12 @@ export const APP_CONFIG = {
     autosaveSeconds: 30,
   },
   camera: {
-    cabEyeHeight: 2.2,
+    cabEyeHeight: 2.15,
+    cabSeatOffset: -0.55,
     cabForwardOffset: 7,
-    cabPitch: -0.12,
+    cabPitch: -Math.atan(4 / 60),
+    cabVerticalFovDegrees: 55,
+    cabNear: 0.15,
     cabHeadingSmoothing: 6,
     heading: 0,
     pitch: -0.42,
@@ -100,12 +124,16 @@ export const APP_CONFIG = {
     minRange: 35,
     maxRange: 900,
     smoothing: 5,
-    // “第三人称固定”：相机在车头正后方，与车头连线仰角 30°、高于车头 200 m，
-    // 水平后移量由 200 / tan(30°) 决定；视线俯角固定为 10°，不提供自由旋转。
+    // “第三人称固定”：默认后上方 30°、高于车头 150 m、俯角 -10°。
+    // 拖动调整绕车方位和俯仰，滚轮调整相对车头高度，继续随车跟随。
     // 车头位于视轴下方 20°，因此该视角使用 50° 竖直视场，避免列车落到画面外。
     fixedView: {
       elevationDegrees: 30,
-      height: 200,
+      height: 150,
+      minHeight: 20,
+      maxHeight: 1500,
+      dragDegreesPerPixel: 0.2,
+      zoomSensitivity: 0.0015,
       pitchDegrees: -10,
       verticalFovDegrees: 50,
     },

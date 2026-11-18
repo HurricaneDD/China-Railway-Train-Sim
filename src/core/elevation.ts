@@ -1,5 +1,6 @@
 import { Cartographic, sampleTerrainMostDetailed, type TerrainProvider } from 'cesium';
-import type { LonLat } from '../types';
+import type { LonLat, RailSegment } from '../types';
+import { railHeight } from './trackProfile';
 import { withTimeout } from '../utils/assets';
 
 export class ElevationService {
@@ -7,6 +8,12 @@ export class ElevationService {
   private cache = new Map<string, number>();
   private pending = new Map<string, Promise<void>>();
   private generation = 0;
+
+  get revision(): number { return this.generation; }
+
+  railHeight(segment: RailSegment, offset: number): number | undefined {
+    return railHeight(segment, offset, point => this.hasHeight(point) ? this.height(point) : undefined);
+  }
 
   setProvider(provider: TerrainProvider): void {
     if (provider === this.provider) return;
