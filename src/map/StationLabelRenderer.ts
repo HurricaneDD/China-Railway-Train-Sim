@@ -130,6 +130,11 @@ export class StationLabelRenderer {
   private addStation(station: Station, mode: Exclude<StationLabelMode, 'none'>): void {
     const config = APP_CONFIG.stationLabels;
     const text = stationLabelText(station.name);
+    // One shared fade band for the dot and the name. Using the same object
+    // prevents the two primitives from drifting apart in future edits.
+    const fadeBand = mode === 'driving'
+      ? new NearFarScalar(config.displayDistance * 0.8, 1, config.displayDistance, 0)
+      : undefined;
     // RELATIVE_TO_GROUND keeps the marker at markerHeight above the terrain
     // surface, so high-altitude stations no longer sink below the globe.
     const anchor = Cartographic.fromDegrees(station.longitude, station.latitude);
@@ -146,8 +151,11 @@ export class StationLabelRenderer {
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
         ...(mode === 'driving' ? {
           // Keep dots and labels in the same display band; the larger render
-          // radius only keeps entities ready for the train's approach.
+          // radius only keeps entities ready for the train's approach. The dot
+          // and the name share one fade band so neither pops in ahead of the
+          // other as the train approaches.
           distanceDisplayCondition: new DistanceDisplayCondition(0, config.displayDistance),
+          translucencyByDistance: fadeBand,
         } : {}),
       },
       label: {
@@ -167,8 +175,8 @@ export class StationLabelRenderer {
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
         ...(mode === 'driving' ? {
           distanceDisplayCondition: new DistanceDisplayCondition(0, config.displayDistance),
-          // Fade only text near the culling edge; the dot stays as a location cue.
-          translucencyByDistance: new NearFarScalar(config.displayDistance * 0.8, 1, config.displayDistance, 0),
+          // The dot uses the same fade band so text and dot appear together.
+          translucencyByDistance: fadeBand,
         } : {}),
       },
     });

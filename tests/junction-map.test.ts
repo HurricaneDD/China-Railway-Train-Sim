@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closestScreenPath, fitLonLatPaths, panViewBy, pointAtPathFraction, screenOf, zoomViewAt, type ScreenPath } from '../src/map/junctionMap';
+import { closestScreenPath, fitLonLatPaths, panViewBy, pinchView, pointAtPathFraction, screenOf, zoomViewAt, type ScreenPath } from '../src/map/junctionMap';
 
 describe('道岔二维配线图视图与点击选择', () => {
   it('将完整候选路径等比放入画布，所有点都留在内边距内', () => {
@@ -44,6 +44,19 @@ describe('道岔二维配线图视图与点击选择', () => {
     expect(pointAtPathFraction(path, 0.75).x).toBeCloseTo(100, 5);
     expect(pointAtPathFraction(path, 0.75).y).toBeCloseTo(50, 5);
     expect(pointAtPathFraction(path, 1)).toEqual({ x: 100, y: 100 });
+  });
+
+  it('双指捏合以起始中点为锚点缩放，并跟随中点平移', () => {
+    const view = { cx: 0.5, cy: 0.5, scale: 100 };
+    const pinched = pinchView(view, 400, 300, { x: 200, y: 150 }, 100, { x: 200, y: 150 }, 200, 50, 400);
+    expect(pinched.scale).toBeCloseTo(200, 8);
+    expect(pinched.cx).toBeCloseTo(0.5, 8);
+    expect(pinched.cy).toBeCloseTo(0.5, 8);
+    const moved = pinchView(view, 400, 300, { x: 200, y: 150 }, 100, { x: 220, y: 150 }, 100, 50, 400);
+    expect(moved.scale).toBeCloseTo(100, 8);
+    expect(moved.cx).toBeCloseTo(0.3, 8);
+    expect(moved.cy).toBeCloseTo(0.5, 8);
+    expect(pinchView(view, 400, 300, { x: 200, y: 150 }, 100, { x: 200, y: 150 }, 1000, 50, 300).scale).toBeCloseTo(300, 8);
   });
 
   it('滚轮缩放锚定光标位置，并受最小/最大比例限制；拖拽平移按像素比例换算', () => {

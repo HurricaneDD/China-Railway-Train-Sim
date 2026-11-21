@@ -71,9 +71,16 @@ h1 strong { color: var(--accent); font-weight: 800; }
 .workspace-backdrop { position: absolute; inset: 0; background: rgba(8,10,8,.22); }
 .panel { color: #ecefe9; background: var(--panel-soft); border: 1px solid var(--line); box-shadow: 0 30px 100px rgba(0,0,0,.35); backdrop-filter: blur(24px); }
 .new-game-panel { position: absolute; top: 24px; bottom: 24px; left: 24px; width: 450px; display: flex; flex-direction: column; }
+.new-game-panel.province-map-mode { top: 16px; bottom: 16px; left: 50%; width: min(960px, calc(100vw - 32px)); background: #171a17; backdrop-filter: none; transform: translateX(-50%); }
 .panel-header { display: flex; align-items: flex-start; justify-content: space-between; padding: 28px 28px 20px; }
 .panel-header .eyebrow { margin-bottom: 8px; }
 .panel-header h2 { margin: 0; font-size: 26px; letter-spacing: -1px; }
+.panel-header h2.compact { font-size: 22px; letter-spacing: -.7px; }
+/* 新游戏第二步优先把纵向空间留给车站名录。 */
+.new-game-panel .panel-header { padding-top: 18px; padding-bottom: 12px; }
+.new-game-panel .panel-header .eyebrow { margin-bottom: 5px; }
+.new-game-panel .tabs button { padding-top: 10px; padding-bottom: 10px; }
+.new-game-panel .panel-body { padding-top: 14px; padding-bottom: 14px; }
 .icon-button { width: 34px; height: 34px; border: 1px solid var(--line); background: transparent; color: #b8bdb5; font-size: 23px; line-height: 1; }
 .icon-button:hover { color: var(--accent); border-color: var(--accent); }
 .tabs { display: grid; grid-template-columns: 1fr 1fr; margin: 0 28px; border-bottom: 1px solid var(--line); }
@@ -81,37 +88,32 @@ h1 strong { color: var(--accent); font-weight: 800; }
 .tabs button.active { border-color: var(--accent); color: #fff; }
 .panel-body { flex: 1; min-height: 0; padding: 22px 28px; }
 .station-picker { display: flex; flex-direction: column; }
-.search-field { display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 14px; border: 1px solid #3b4139; background: #111411; }
+.search-field { display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 14px; border: 1px solid #3b4139; background: #111411; }
 .search-field span { color: var(--accent); font-size: 24px; }
 .search-field input { width: 100%; border: 0; color: #fff; background: transparent; font-size: 13px; }
 .search-field:focus-within { border-color: var(--accent); }
-.filter-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.filter-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
 select { min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 0; color: #c8cec4; background: #1c201c; font-size: 11px; }
-.result-meta { display: flex; justify-content: space-between; margin: 22px 0 8px; color: var(--muted); font-size: 10px; letter-spacing: 1px; }
+.result-meta { display: flex; justify-content: space-between; margin: 14px 0 8px; color: var(--muted); font-size: 10px; letter-spacing: 1px; }
 .station-results { min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #4a5147 transparent; }
-.station-row { display: flex; align-items: center; gap: 13px; width: 100%; padding: 13px 5px; border: 0; border-bottom: 1px solid rgba(255,255,255,.07); background: transparent; text-align: left; }
+.station-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 5px; border: 0; border-bottom: 1px solid rgba(255,255,255,.07); background: transparent; text-align: left; }
 .station-row:not(:disabled):hover { background: rgba(216,255,98,.05); }
 .station-code { width: 40px; color: var(--accent); font-family: 'Barlow Condensed', monospace; font-size: 12px; letter-spacing: 1px; }
-.station-name { flex: 1; min-width: 0; }
-.station-name strong { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; }
+.station-name { display: flex; flex: 1; align-items: baseline; gap: 10px; min-width: 0; }
+.station-name strong { display: flex; flex-shrink: 0; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .station-name strong small { padding: 2px 4px; color: var(--danger); border: 1px solid rgba(255,131,110,.3); font-size: 8px; }
-.station-name > small { display: block; overflow: hidden; margin-top: 5px; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.station-name > small { display: block; min-width: 0; margin-top: 0; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .row-arrow { color: #697066; }
 .empty-state { padding: 40px 10px; color: var(--muted); font-size: 12px; line-height: 1.8; text-align: center; }
-.panel-footer { display: flex; align-items: center; gap: 8px; padding: 16px 28px; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; }
 .map-picker { overflow-y: auto; }
 .form-label { color: var(--muted); font-size: 10px; letter-spacing: 1px; }
-/* 两步新游戏流程：第一步整幅省份网格，第二步省份预览条 + 省内检索。 */
+/* 两步新游戏流程：第一步点击省级行政区划图，第二步省份预览条 + 省内检索。 */
 .province-step { display: flex; flex-direction: column; }
-.province-step .form-label { flex-shrink: 0; }
-.province-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; max-height: 300px; margin: 14px 0 22px; overflow-y: auto; }
-.province-grid.tall { flex: 1; min-height: 0; max-height: none; margin: 12px 0 16px; }
-.province-grid button { padding: 10px 3px; border: 1px solid var(--line); background: #1b1f1b; }
-.province-grid button strong { display: block; font-size: 11px; font-weight: 500; }
-.province-grid button small { display: block; margin-top: 4px; color: #727a6f; font-family: 'Barlow Condensed', sans-serif; font-size: 8px; }
-.province-grid button:not(:disabled):hover { border-color: rgba(216,255,98,.55); background: rgba(216,255,98,.06); }
-.province-grid button.active { border-color: var(--accent); color: var(--accent); background: rgba(216,255,98,.07); }
-.province-bar { display: flex; align-items: center; gap: 10px; margin: 0 28px; padding: 14px 0 16px; border-bottom: 1px solid var(--line); }
+.province-map-meta { display: flex; flex-shrink: 0; justify-content: flex-end; margin-top: 5px; }
+.province-map-source { color: #707b6c; font-size: 8px; text-decoration: none; white-space: nowrap; }
+.province-map-source:hover { color: var(--accent); }
+.province-compact-list { display: none; }
+.province-bar { display: flex; align-items: center; gap: 10px; margin: 0 28px; padding: 8px 0 9px; border-bottom: 1px solid var(--line); }
 .province-bar > span { flex-shrink: 0; color: var(--muted); font-size: 10px; letter-spacing: 1px; }
 .province-bar strong { color: var(--accent); font-size: 15px; letter-spacing: -.3px; }
 .province-bar small { flex: 1; min-width: 0; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
@@ -123,7 +125,7 @@ select { min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-
 .map-instruction strong { font-size: 12px; }
 .map-instruction p { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.7; }
 .full-width { width: 100%; }
-.fine-print { display: block; margin-top: 12px; color: var(--muted); font-size: 9px; line-height: 1.7; }
+.fine-print { display: block; margin-top: 8px; color: var(--muted); font-size: 9px; line-height: 1.7; }
 .map-select-banner { position: absolute; top: 24px; left: 50%; display: flex; align-items: center; gap: 10px; padding: 13px 18px; border: 1px solid rgba(216,255,98,.4); background: rgba(16,18,16,.92); font-size: 12px; transform: translateX(-25%); }
 .map-select-banner button { margin-left: 12px; border: 0; color: var(--accent); background: none; }
 .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s infinite; }
@@ -315,6 +317,21 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
 .data-credits a { color: var(--accent); text-underline-offset: 2px; }
 /* Junction dialog styling lives next to its responsive rules below. */
 .loading-indicator { position: fixed; z-index: 30; right: 24px; bottom: 24px; display: flex; align-items: center; gap: 10px; padding: 12px 16px; border: 1px solid var(--line); background: #161a16; font-size: 10px; }
+/* Full-screen data loading for the province preview. */
+.province-loading { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 20px; background: rgba(5, 7, 5, .88); backdrop-filter: blur(10px); }
+.province-loading-card { width: min(540px, 100%); padding: 28px 28px 24px; border: 1px solid rgba(216, 255, 98, .5); background: linear-gradient(135deg, #182018, #101510 72%); box-shadow: 0 30px 100px rgba(0, 0, 0, .55), 0 0 70px rgba(216, 255, 98, .08); text-align: left; }
+.province-loading-card .eyebrow { margin: 0 0 6px; color: var(--accent); font-size: 9px; letter-spacing: 1.8px; }
+.province-loading-card h2 { margin: 0; color: #edf3e7; font-size: 24px; font-weight: 600; letter-spacing: -.7px; }
+.province-loading-province { margin: 9px 0 0; color: var(--accent); font-size: 13px; }
+.province-loading-track { height: 9px; margin-top: 22px; overflow: hidden; border: 1px solid rgba(255, 255, 255, .14); background: #161c16; }
+.province-loading-fill { height: 100%; background: linear-gradient(90deg, #8fbf3f, var(--accent)); box-shadow: 0 0 14px rgba(216, 255, 98, .5); transition: width .16s ease; }
+.province-loading-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-top: 9px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.province-loading-meta span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.province-loading-meta b { flex-shrink: 0; color: var(--accent); font-family: 'Barlow Condensed', sans-serif; font-size: 17px; letter-spacing: .5px; }
+@media (max-width: 620px) {
+  .province-loading-card { padding: 22px 18px 19px; }
+  .province-loading-card h2 { font-size: 20px; }
+}
 .is-driving .loading-indicator { bottom: 74px; }
 .spinner { width: 13px; height: 13px; border: 2px solid #59604f; border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -322,9 +339,23 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
 .toast.error { border-color: #714a41; color: #ffd0c5; background: rgba(48,29,25,.97); }
 .toast button { border: 0; background: none; color: inherit; font-size: 18px; }
 
+@media (max-width: 1000px) {
+  .new-game-panel.province-map-mode { width: calc(100vw - 32px); }
+}
+
 @media (max-width: 900px) {
   .hero-copy { width: 100%; }
   .new-game-panel { width: 410px; }
+  .new-game-panel.province-map-mode { width: calc(100vw - 32px); }
+}
+
+@media (max-width: 700px) {
+  .province-compact-list { display: grid; flex-shrink: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; max-height: 190px; margin-top: 9px; padding-right: 2px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #4a5147 transparent; }
+  .province-compact-list button { display: flex; align-items: baseline; justify-content: space-between; gap: 5px; padding: 7px 8px; border: 1px solid var(--line); background: #1b1f1b; color: #e5ece0; font-size: 10px; text-align: left; }
+  .province-compact-list button:not(:disabled):hover { border-color: rgba(216,255,98,.55); background: rgba(216,255,98,.06); }
+  .province-compact-list strong { font-weight: 500; }
+  .province-compact-list small { color: var(--muted); font-family: 'Barlow Condensed', sans-serif; font-size: 8px; white-space: nowrap; }
+  .province-map-meta { justify-content: flex-start; }
 }
 
 @media (max-width: 600px) {
@@ -335,7 +366,10 @@ kbd { display: inline-block; min-width: 17px; padding: 2px 4px; border: 1px soli
   h1 { font-size: 48px; letter-spacing: -2px; }
   .hero-description { margin: 22px 0; font-size: 13px; }
   .start-footer span:last-child { display: none; }
-  .new-game-panel { inset: 0; width: 100%; border: 0; }
+  .new-game-panel, .new-game-panel.province-map-mode { inset: 0; width: 100%; border: 0; }
+  .new-game-panel.province-map-mode { left: 0; transform: none; }
+  .province-step .province-map { flex: 0 0 auto; width: 100%; aspect-ratio: 1000 / 843.5; }
+  .province-step .province-compact-list { flex: 1; min-height: 0; max-height: none; }
   .panel-header { padding: 22px; }
   .panel-body { padding: 18px 22px; }
   .tabs { margin: 0 22px; }

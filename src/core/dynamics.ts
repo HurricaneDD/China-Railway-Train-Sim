@@ -93,6 +93,8 @@ export function stepDynamics(state: TrainState, dt: number, slope: number, brake
           if (target > normalTraction) {
             // Temporarily lift BOTH requested traction and equivalent adhesion;
             // leave locomotive parameters, base adhesion and manual sand intact.
+            // The cap sits above the full train weight, so steep grades are limited
+            // by the grade force itself rather than by the old 750 kN ceiling.
             const effectiveTraction = Math.min(Math.max(requested, target), Math.max(adhesionLimit, target), settings.maxTotalForce);
             assist.force = effectiveTraction - normalTraction;
             state.tractionForce = effectiveTraction * command;

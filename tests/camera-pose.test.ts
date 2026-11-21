@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { APP_CONFIG } from '../src/config';
-import { cabCameraFov, cabCameraPose, defaultFixedCameraView, fixedCameraFov, fixedCameraPose, horizontalFovForVertical, rotateFixedCamera, zoomFixedCamera } from '../src/map/cameraPose';
+import { cabCameraFov, cabCameraPose, defaultFixedCameraView, fixedCameraFov, fixedCameraPose, horizontalFovForVertical, rotateFixedCamera, zoomFixedCamera, zoomFixedCameraByScale } from '../src/map/cameraPose';
 import { bearing, distance } from '../src/utils/geo';
 import { Cartesian3, Matrix4 } from 'cesium';
 import { CAB_LAYOUT } from '../src/map/cabGeometry';
@@ -70,30 +70,48 @@ describe('第三人称固定视角', () => {
     expect(bearing(head, pose)).toBeCloseTo(180, 2);
   });
 
-  it('拖动绕车旋转并保持车头位于视轴下方20度，跟随转弯保留用户偏角', () => {
+  it('拖动只改变镜头朝向，不改变相机位置，且拖动方向相反', () => {
     const view = defaultFixedCameraView();
-    rotateFixedCamera(view, -450, -100);
-    const pose = fixedCameraPose(head, 90, view);
-    expect(pose.heading).toBe(180);
-    expect(pose.pitch * 180 / Math.PI).toBeCloseTo(-30);
-    expect(bearing(head, pose)).toBeCloseTo(0, 2);
-    expect(Math.atan2(view.height, distance(head, pose)) * 180 / Math.PI).toBeCloseTo(50, 0);
-    expect(fixedCameraPose(head, 120, view).heading).toBe(210);
-    rotateFixedCamera(view, 100000, -100000);
+    const base = fixedCameraPose(head, 90, view);
+    rotateFixedCamera(view, 100, 100);
+    const turned = fixedCameraPose(head, 90, view);
+    expect(turned.lon).toBe(base.lon);
+    expect(turned.lat).toBe(base.lat);
+    expect(turned.altitude).toBe(base.altitude);
+    expect(view.yaw).toBeCloseTo(20);
+    expect(turned.heading).toBeCloseTo(110); // 向右拖动看右
+    expect(turned.pitch * 180 / Math.PI).toBeCloseTo(-30); // 向下拖动看下
+    // 相机仍在车头正后方、保持30°仰角，只是朝向改变。
+    expect(bearing(head, turned)).toBeCloseTo(270, 2);
+    expect(Math.atan2(turned.altitude - head.height, distance(head, turned)) * 180 / Math.PI).toBeCloseTo(30, 1);
+
+    const reverse = defaultFixedCameraView();
+    rotateFixedCamera(reverse, -100, -100);
+    expect(reverse.yaw).toBeCloseTo(340);
+    expect(reverse.pitch).toBeCloseTo(10);
+    expect(fixedCameraPose(head, 90, reverse).heading).toBeCloseTo(70);
+
+    rotateFixedCamera(view, 100000, 100000);
     expect(view.pitch).toBe(-65);
-    expect(Number.isFinite(fixedCameraPose(head, 90, view).lon)).toBe(true);
-    rotateFixedCamera(view, 0, 100000);
+    rotateFixedCamera(view, 0, -100000);
     expect(view.pitch).toBe(10);
+    expect(view.yaw).toBeGreaterThanOrEqual(0);
+    expect(view.yaw).toBeLessThan(360);
   });
 
-  it('滚轮只改变高度和跟随距离，限制20–1500米，重新进入使用默认状态', () => {
+  it('滚轮只改变高度和位置，不改变镜头朝向', () => {
     const view = defaultFixedCameraView();
+    const base = fixedCameraPose(head, 37, view);
     zoomFixedCamera(view, 120);
     expect(view.height).toBeLessThan(150);
-    const pose = fixedCameraPose(head, 37, view);
-    expect(pose.altitude - head.height).toBeCloseTo(view.height);
-    expect(pose.heading).toBe(37);
-    expect(pose.pitch).toBeCloseTo(-Math.PI / 18);
+    const zoomed = fixedCameraPose(head, 37, view);
+    expect(zoomed.altitude - head.height).toBeCloseTo(view.height);
+    expect(zoomed.heading).toBe(37);
+    expect(zoomed.pitch).toBeCloseTo(-Math.PI / 18);
+    expect(distance(base, zoomed)).toBeGreaterThan(1);
+    expect(bearing(head, zoomed)).toBeCloseTo(217, 0);
+    expect(Math.abs(distance(head, zoomed) - view.height / Math.tan(Math.PI / 6))).toBeLessThan(1.5);
+    expect(Math.atan2(view.height, distance(head, zoomed)) * 180 / Math.PI).toBeCloseTo(30, 0);
     zoomFixedCamera(view, -120);
     expect(view.height).toBeCloseTo(150);
     zoomFixedCamera(view, -100000);
@@ -101,6 +119,31 @@ describe('第三人称固定视角', () => {
     zoomFixedCamera(view, 100000);
     expect(view.height).toBe(20);
     expect(defaultFixedCameraView()).toEqual({ height: 150, yaw: 0, pitch: -10 });
+  });
+
+  it('双指捏合按比例改变高度和位置，不改变镜头朝向', () => {
+    const view = defaultFixedCameraView();
+    const base = fixedCameraPose(head, 37, view);
+    zoomFixedCameraByScale(view, 2);
+    expect(view.height).toBeCloseTo(75);
+    const zoomed = fixedCameraPose(head, 37, view);
+    expect(zoomed.altitude - head.height).toBeCloseTo(75);
+    expect(zoomed.heading).toBe(37);
+    expect(zoomed.pitch).toBeCloseTo(-Math.PI / 18);
+    expect(distance(base, zoomed)).toBeGreaterThan(1);
+    expect(Math.atan2(75, distance(head, zoomed)) * 180 / Math.PI).toBeCloseTo(30, 0);
+    zoomFixedCameraByScale(view, 0.5);
+    expect(view.height).toBeCloseTo(150);
+    zoomFixedCameraByScale(view, 0);
+    expect(view.height).toBeCloseTo(150);
+    zoomFixedCameraByScale(view, -2);
+    expect(view.height).toBeCloseTo(150);
+    zoomFixedCameraByScale(view, 1000);
+    expect(view.height).toBe(20);
+    zoomFixedCameraByScale(view, 0.001);
+    expect(view.height).toBe(1500);
+    expect(view.yaw).toBe(0);
+    expect(view.pitch).toBe(-10);
   });
 
   it('固定视角的竖直视场覆盖车头在视轴下方的 20°', () => {

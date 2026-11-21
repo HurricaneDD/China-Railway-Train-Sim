@@ -56,12 +56,15 @@ export function nearbyStations(
   return found.slice(0, limit);
 }
 
-/** Station records do not include the trailing "站"; keep the display compact. */
+/**
+ * Station records omit the display suffix "站". Append it once while keeping
+ * the label bounded; an overlong name keeps the suffix and ends with "…站".
+ */
 export function stationLabelText(name: string): string {
   const trimmed = name.trim();
-  return trimmed.length > STATION_LABEL_MAX_CHARS
-    ? `${trimmed.slice(0, STATION_LABEL_MAX_CHARS - 1)}…`
-    : trimmed;
+  const display = trimmed.endsWith('站') ? trimmed : `${trimmed}站`;
+  if (display.length <= STATION_LABEL_MAX_CHARS) return display;
+  return `${display.slice(0, STATION_LABEL_MAX_CHARS - 2)}…站`;
 }
 
 /** Conservative text width so collision checks do not depend on canvas metrics. */

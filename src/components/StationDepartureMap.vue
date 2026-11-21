@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { LonLat, StationDeparture } from '../types';
+import { stationDisplayName } from '../data/stationDeparture';
 import { BASEMAPS, type BasemapProvider } from '../map/basemap';
 import { BasemapTiles, drawMapBackground, drawNorthArrow, drawScaleBar } from '../map/canvasLayer';
-import { closestScreenPath, fitLonLatPaths, panViewBy, pointAtPathFraction, screenOf, zoomViewAt, type MapView, type ScreenPath, type ScreenPoint } from '../map/junctionMap';
+import { closestScreenPath, fitLonLatPaths, panViewBy, pinchView, pointAtPathFraction, screenOf, zoomViewAt, type MapView, type ScreenPath, type ScreenPoint } from '../map/junctionMap';
 import { wgs84ToGcj02, gcj02ToWgs84 } from '../utils/gcj02';
 import { projectMercator, unprojectMercator } from '../utils/mercator';
 
@@ -26,6 +27,9 @@ let renderFrame = 0;
 let disposed = false;
 let hitPaths: ScreenPath[] = [];
 let drag: { x: number; y: number; start: MapView; moved: boolean } | undefined;
+let pinch: { distance: number; midpoint: ScreenPoint; view: MapView } | undefined;
+let gestureMoved = false;
+const pointers = new Map<number, ScreenPoint>();
 const tiles = new BasemapTiles();
 
 const provider = computed(() => BASEMAPS[basemap.value]);
@@ -183,7 +187,7 @@ function drawStation(): void {
   ctx.fillStyle = '#d8ff62';
   ctx.fill();
 
-  const label = props.departure.station.name;
+  const label = stationDisplayName(props.departure.station.name);
   ctx.font = '600 10px "Noto Sans SC", system-ui, sans-serif';
   const width = ctx.measureText(label).width + 14;
   const x = Math.max(8, Math.min(size.value.width - width - 8, node.x + 13));
@@ -267,16 +271,56 @@ function findLineAt(point: ScreenPoint): string | undefined {
   return closestScreenPath(hitPaths, point.x, point.y, 14);
 }
 
+function touchPair(): [ScreenPoint, ScreenPoint] | undefined {
+  if (pointers.size < 2) return;
+  const points = [...pointers.values()];
+  return [points[0], points[1]];
+}
+
+function startPinch(): void {
+  const pair = touchPair();
+  if (!pair || !view) return;
+  drag = undefined;
+  gestureMoved = true;
+  pinch = {
+    distance: Math.max(1, Math.hypot(pair[1].x - pair[0].x, pair[1].y - pair[0].y)),
+    midpoint: { x: (pair[0].x + pair[1].x) / 2, y: (pair[0].y + pair[1].y) / 2 },
+    view: { ...view },
+  };
+}
+
+function updatePinch(): void {
+  const pair = touchPair();
+  if (!pair || !pinch) return;
+  const distance = Math.max(1, Math.hypot(pair[1].x - pair[0].x, pair[1].y - pair[0].y));
+  const midpoint = { x: (pair[0].x + pair[1].x) / 2, y: (pair[0].y + pair[1].y) / 2 };
+  const limits = [baseScale * 0.4, baseScale * 35] as const;
+  view = pinchView(pinch.view, size.value.width, size.value.height, pinch.midpoint, pinch.distance, midpoint, distance, limits[0], limits[1]);
+  requestRender();
+}
+
 function onPointerDown(event: PointerEvent): void {
   if (event.button !== 0 || !view) return;
+  const point = localPoint(event);
+  pointers.set(event.pointerId, point);
   canvas.value?.setPointerCapture(event.pointerId);
-  drag = { ...localPoint(event), start: { ...view }, moved: false };
+  if (pointers.size >= 2) {
+    startPinch();
+  } else {
+    gestureMoved = false;
+    drag = { ...point, start: { ...view }, moved: false };
+  }
   if (canvas.value) canvas.value.style.cursor = 'grabbing';
 }
 
 function onPointerMove(event: PointerEvent): void {
+  const point = localPoint(event);
+  if (pointers.has(event.pointerId)) pointers.set(event.pointerId, point);
+  if (pointers.size >= 2) {
+    updatePinch();
+    return;
+  }
   if (drag) {
-    const point = localPoint(event);
     const dx = point.x - drag.x;
     const dy = point.y - drag.y;
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.moved = true;
@@ -284,7 +328,7 @@ function onPointerMove(event: PointerEvent): void {
     requestRender();
     return;
   }
-  const id = findLineAt(localPoint(event));
+  const id = findLineAt(point);
   if (id !== hoverId.value) {
     hoverId.value = id;
     requestRender();
@@ -293,20 +337,54 @@ function onPointerMove(event: PointerEvent): void {
 }
 
 function onPointerUp(event: PointerEvent): void {
-  if (!drag) return;
   const point = localPoint(event);
-  const wasMoved = drag.moved;
+  pointers.delete(event.pointerId);
+  if (canvas.value?.hasPointerCapture(event.pointerId)) canvas.value.releasePointerCapture(event.pointerId);
+  if (pointers.size >= 2) {
+    updatePinch();
+    return;
+  }
+  if (pointers.size === 1) {
+    pinch = undefined;
+    const remaining = [...pointers.values()][0];
+    // Continue one-finger panning after a pinch, but never turn it into a click.
+    drag = { ...remaining, start: view ? { ...view } : { cx: 0, cy: 0, scale: 1 }, moved: true };
+    return;
+  }
+  pinch = undefined;
+  const wasMoved = drag?.moved ?? true;
   drag = undefined;
-  canvas.value?.releasePointerCapture(event.pointerId);
   if (canvas.value) canvas.value.style.cursor = 'grab';
-  if (!wasMoved) {
+  if (!wasMoved && !gestureMoved) {
     const id = findLineAt(point);
     if (id) emit('select', id);
+  }
+  gestureMoved = false;
+  if (hoverId.value && !findLineAt(point)) {
+    hoverId.value = undefined;
+    requestRender();
+  }
+}
+
+function onPointerCancel(event: PointerEvent): void {
+  pointers.delete(event.pointerId);
+  if (canvas.value?.hasPointerCapture(event.pointerId)) canvas.value.releasePointerCapture(event.pointerId);
+  if (pointers.size === 0) {
+    drag = undefined;
+    pinch = undefined;
+    gestureMoved = false;
+    if (canvas.value) canvas.value.style.cursor = 'grab';
+    return;
+  }
+  if (pointers.size < 2) {
+    pinch = undefined;
+    const remaining = [...pointers.values()][0];
+    drag = { ...remaining, start: view ? { ...view } : { cx: 0, cy: 0, scale: 1 }, moved: true };
   }
 }
 
 function onPointerLeave(): void {
-  if (drag) return;
+  if (drag || pointers.size) return;
   if (hoverId.value) {
     hoverId.value = undefined;
     requestRender();
@@ -350,7 +428,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="host" class="station-map-host">
-    <canvas ref="canvas" class="station-map-canvas" role="img" tabindex="0" aria-label="车站周边线路图。点击线路选择始发线路；滚轮缩放，拖动平移，加号减号按钮可缩放。灰色线路为车站附近国铁线路，绿色为已选线路。" @wheel.prevent="onWheel" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerUp" @pointerleave="onPointerLeave" @keydown="onKeyDown" />
+    <canvas ref="canvas" class="station-map-canvas" role="img" tabindex="0" aria-label="车站周边线路图。点击线路选择始发线路；滚轮或双指缩放，拖动平移，加号减号按钮可缩放。灰色线路为车站附近国铁线路，绿色为已选线路。" @wheel.prevent="onWheel" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerCancel" @pointerleave="onPointerLeave" @keydown="onKeyDown" />
     <div class="station-map-toolbar" aria-label="底图选择">
       <span>高德底图</span>
       <button :class="{ active: basemap === 'amap-satellite' }" :aria-pressed="basemap === 'amap-satellite'" @click="setBasemap('amap-satellite')">卫星</button>
@@ -365,7 +443,6 @@ onBeforeUnmount(() => {
     <p v-if="hoveredLine" class="station-map-hover">
       {{ hoveredLine.name === '未命名铁路' ? '未命名线路' : hoveredLine.name }} · 距站 {{ Math.round(hoveredLine.distance) }} m
     </p>
-    <p class="station-map-hint">滚轮缩放 · 拖动平移 · 点击线路选择</p>
     <p class="station-map-attribution">{{ provider.attribution }}{{ coordinateNotice }}</p>
     <p v-if="!departure.lines.length" class="station-map-notice error">没有可选线路</p>
   </div>
@@ -387,7 +464,6 @@ onBeforeUnmount(() => {
 .station-map-notice { position: absolute; top: 12px; left: 50%; margin: 0; padding: 5px 9px; color: #d7e5cf; background: rgba(8, 14, 9, .84); border: 1px solid rgba(255,255,255,.13); font-size: 9px; transform: translateX(-50%); white-space: nowrap; pointer-events: none; }
 .station-map-notice.error { color: #ffd0c5; border-color: #714a41; }
 .station-map-hover { position: absolute; top: 58px; left: 12px; max-width: min(58%, 420px); margin: 0; padding: 6px 10px; overflow: hidden; color: #eff8e8; background: rgba(8, 14, 9, .9); border: 1px solid rgba(216, 255, 98, .35); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
-.station-map-hint { position: absolute; bottom: 11px; left: 50%; margin: 0; padding: 4px 8px; color: rgba(229, 238, 222, .65); background: rgba(8, 14, 9, .66); font-size: 8.5px; transform: translateX(-50%); white-space: nowrap; pointer-events: none; }
 .station-map-attribution { position: absolute; right: 9px; bottom: 7px; max-width: 56%; margin: 0; overflow: hidden; color: rgba(228, 238, 222, .62); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; text-align: right; pointer-events: none; }
 @media (max-width: 620px) {
   .station-map-toolbar { top: 8px; right: 8px; }
@@ -395,7 +471,6 @@ onBeforeUnmount(() => {
   .station-map-zoom { top: 48px; right: 8px; }
   .station-map-notice { top: 8px; left: 8px; max-width: calc(100% - 132px); overflow: hidden; text-overflow: ellipsis; transform: none; }
   .station-map-hover { top: 88px; left: 8px; max-width: calc(100% - 60px); }
-  .station-map-hint { display: none; }
   .station-map-attribution { max-width: 52%; font-size: 7px; }
 }
 </style>

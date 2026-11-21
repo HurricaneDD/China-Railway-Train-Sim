@@ -127,12 +127,21 @@ describe('默认陡坡牵引辅助：确定性 60 Hz 合成工况', () => {
     expect(boundary.assist.active).toBe(true);
   });
 
-  it('辅助总力封顶750kN，无法保证任意陡坡均可起步', () => {
-    const { train, assist, tick } = fixture();
-    tick(0.3);
-    expect(train.tractionForce).toBe(750_000);
-    expect(assist.force).toBeGreaterThan(0);
-    expect(train.acceleration).toBeLessThan(0);
+  it('辅助总力上限高于整列重力，300‰ 以上也能起步并维持 15 km/h 爬行', () => {
+    expect(APP_CONFIG.train.steepGradeAssist.maxTotalForce).toBeGreaterThan(totalMass() * 9.80665);
+    for (const slope of [0.3, 0.35, 1.0]) {
+      const { train, assist, tick, run } = fixture();
+      tick(slope);
+      expect(assist.active).toBe(true);
+      expect(assist.force).toBeGreaterThan(0);
+      expect(train.tractionForce).toBeGreaterThan(750_000);
+      expect(train.tractionForce).toBeLessThanOrEqual(APP_CONFIG.train.steepGradeAssist.maxTotalForce);
+      expect(train.acceleration).toBeGreaterThan(0);
+      expect(train.velocity).toBeGreaterThan(0);
+      run(300, slope);
+      expect(train.velocity * 3.6).toBeCloseTo(15, 5);
+      expect(train.acceleration).toBeCloseTo(0, 8);
+    }
   });
 
   it('手动撒砂保持原计时和常规上限，辅助按剩余缺口补力', () => {

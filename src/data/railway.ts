@@ -1,7 +1,7 @@
 import { APP_CONFIG } from '../config';
 import type { LonLat, ProvinceInfo, RailNode, RailProperties, RailSegment, SnapResult } from '../types';
 import { bearing, distance, nearestOnSegment, pointAt } from '../utils/geo';
-import { fetchJson } from '../utils/assets';
+import { fetchJson, type FetchProgressHandler } from '../utils/assets';
 
 export interface RailBoundary {
   offset: number;
@@ -40,7 +40,19 @@ interface RawProvince {
 }
 
 /** Injectable so the development inspector can resolve nested-page data paths in dev and build. */
-export type JsonFetcher = <T>(path: string) => Promise<T>;
+export type JsonFetcher = <T>(path: string, onProgress?: FetchProgressHandler) => Promise<T>;
+
+export interface ProvinceLoadProgress {
+  phase: 'download' | 'parse' | 'done';
+  /** Progress within the current phase, 0..1. */
+  ratio: number;
+  loadedBytes?: number;
+  totalBytes?: number | null;
+  featuresDone?: number;
+  featuresTotal?: number;
+}
+
+export type ProvinceLoadProgressHandler = (progress: ProvinceLoadProgress) => void;
 
 // Alias lookups keep existing V1 save IDs valid without rendering duplicate geometry.
 class SegmentMap extends Map<string, RailSegment> {
@@ -84,43 +96,64 @@ export class RailNetwork {
 
   constructor(private readonly loadJson: JsonFetcher = fetchJson) {}
 
-  async loadProvince(province: ProvinceInfo): Promise<{ segments: number; nodes: number }> {
-    if (this.loadedProvinces.has(province.adcode)) return { segments: this.segments.size, nodes: this.nodes.size };
-    const data = await this.loadJson<RawProvince>(province.file);
+  async loadProvince(province: ProvinceInfo, onProgress?: ProvinceLoadProgressHandler): Promise<{ segments: number; nodes: number }> {
+    if (this.loadedProvinces.has(province.adcode)) {
+      onProgress?.({ phase: 'done', ratio: 1 });
+      return { segments: this.segments.size, nodes: this.nodes.size };
+    }
+    const data = await this.loadJson<RawProvince>(province.file, onProgress ? (progress) => {
+      const totalBytes = progress.totalBytes ?? province.size_bytes;
+      onProgress({
+        phase: 'download',
+        ratio: progress.totalBytes ? progress.ratio : Math.min(1, progress.loadedBytes / Math.max(1, province.size_bytes)),
+        loadedBytes: progress.loadedBytes,
+        totalBytes,
+      });
+    } : undefined);
     if (data.type !== 'FeatureCollection' || !Array.isArray(data.features)) throw new Error(`${province.province}线路数据格式不正确`);
-    data.features.forEach((feature, featureIndex) => {
+    const featureTotal = data.features.length;
+    onProgress?.({ phase: 'parse', ratio: 0, featuresDone: 0, featuresTotal: featureTotal });
+    for (let featureIndex = 0; featureIndex < featureTotal; featureIndex++) {
+      const feature = data.features[featureIndex];
       const properties = this.readProperties(feature.properties, province.province);
-      if (!properties || feature.geometry?.type !== 'MultiLineString') return;
+      if (!properties || feature.geometry?.type !== 'MultiLineString') continue;
       const dedupeKey = `${properties.osmId}:${properties.layer}`;
       let parts = this.featureParts.get(dedupeKey);
       if (!parts) {
         parts = [];
         this.featureParts.set(dedupeKey, parts);
       }
-      feature.geometry.coordinates.forEach((rawPoints, partIndex) => {
+      const coordinates = feature.geometry.coordinates;
+      for (let partIndex = 0; partIndex < coordinates.length; partIndex++) {
+        const rawPoints = coordinates[partIndex];
         const points = rawPoints.filter((point) => point.length >= 2 && Number.isFinite(point[0]) && Number.isFinite(point[1])).map(([lon, lat]) => ({ lon, lat }));
-        if (points.length < 2) return;
+        if (points.length < 2) continue;
         const id = `${province.adcode}:${featureIndex}:${partIndex}`;
-        const existingId = parts!.find((candidateId) => {
+        const existingId = parts.find((candidateId) => {
           const candidate = this.segments.get(candidateId)!;
           return candidate.points.length === points.length && candidate.points.every((point, index) => point.lon === points[index].lon && point.lat === points[index].lat);
         });
         if (existingId) {
           this.segments.alias(id, existingId);
-          return;
+          continue;
         }
         const cumulative = [0];
         for (let i = 1; i < points.length; i++) cumulative.push(cumulative[i - 1] + distance(points[i - 1], points[i]));
-        if (cumulative[cumulative.length - 1] < 0.1) return;
+        if (cumulative[cumulative.length - 1] < 0.1) continue;
         const segment: RailSegment = { id, properties, points, cumulative, length: cumulative[cumulative.length - 1], startNode: '', endNode: '' };
         segment.startNode = this.connectNode(points[0], properties, id);
         segment.endNode = this.connectNode(points[points.length - 1], properties, id);
         this.segments.set(id, segment);
         this.segmentOrder.set(id, this.segmentSequence++);
         this.indexSegment(segment);
-        parts!.push(id);
-      });
-    });
+        parts.push(id);
+      }
+      if (onProgress && (featureIndex % 500 === 0 || featureIndex === featureTotal - 1)) {
+        onProgress({ phase: 'parse', ratio: (featureIndex + 1) / featureTotal, featuresDone: featureIndex + 1, featuresTotal: featureTotal });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+    onProgress?.({ phase: 'done', ratio: 1, featuresDone: featureTotal, featuresTotal: featureTotal });
     this.loadedProvinces.add(province.adcode);
     // New endpoints or interior shared vertices can change old topology. Invalidate the
     // lazy caches instead of rebuilding every loaded province on the next movement tick.
@@ -460,12 +493,15 @@ export class RailwayRepository {
     return this.provinces.find((province) => province.province === name);
   }
 
-  async load(name: string): Promise<void> {
+  async load(name: string, onProgress?: ProvinceLoadProgressHandler): Promise<void> {
     const province = this.byProvince(name);
     if (!province) throw new Error(`没有 ${name} 的铁路数据`);
-    if (this.network.loadedProvinces.has(province.adcode)) return;
+    if (this.network.loadedProvinces.has(province.adcode)) {
+      onProgress?.({ phase: 'done', ratio: 1 });
+      return;
+    }
     if (!this.loading.has(province.adcode)) {
-      this.loading.set(province.adcode, this.network.loadProvince(province).finally(() => this.loading.delete(province.adcode)));
+      this.loading.set(province.adcode, this.network.loadProvince(province, onProgress).finally(() => this.loading.delete(province.adcode)));
     }
     await this.loading.get(province.adcode);
   }

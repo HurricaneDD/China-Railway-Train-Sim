@@ -194,7 +194,7 @@ onBeforeUnmount(() => {
       <div v-else-if="session.connectionWarning" class="route-status" role="status">{{ session.connectionWarning }}</div>
 
       <div v-if="cameraMode !== 'cab'" class="camera-hint">
-        {{ cameraMode === 'fixed' ? '左键/单指拖动旋转 · 滚轮调节高度' : '左键拖动旋转 · 滚轮缩放' }}
+        {{ cameraMode === 'fixed' ? '左键/单指拖动转动镜头 · 滚轮/双指捏合调整高度' : '左键拖动旋转 · 滚轮缩放' }}
         <div v-if="cameraMode === 'free'"><button @click="$emit('camera', cameraRange - 35)">−</button><button @click="$emit('camera', cameraRange + 35)">＋</button></div>
       </div>
     </main>

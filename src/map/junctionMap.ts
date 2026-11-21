@@ -121,3 +121,22 @@ export function zoomViewAt(view: MapView, width: number, height: number, x: numb
 export function panViewBy(view: MapView, dx: number, dy: number): MapView {
   return { cx: view.cx - dx / view.scale, cy: view.cy - dy / view.scale, scale: view.scale };
 }
+
+/**
+ * Two-finger pinch: scale around the starting midpoint, then follow the moving
+ * midpoint so the map also pans with the gesture.
+ */
+export function pinchView(
+  start: MapView,
+  width: number,
+  height: number,
+  startMid: ScreenPoint,
+  startDistance: number,
+  mid: ScreenPoint,
+  distance: number,
+  minScale: number,
+  maxScale: number,
+): MapView {
+  const zoomed = zoomViewAt(start, width, height, startMid.x, startMid.y, distance / Math.max(1, startDistance), minScale, maxScale);
+  return panViewBy(zoomed, mid.x - startMid.x, mid.y - startMid.y);
+}

@@ -8,7 +8,7 @@ import { APP_CONFIG } from '../config';
 import type { GameSession } from '../core/session';
 import type { CameraMode, LonLat, RailSegment, Station } from '../types';
 import { BASEMAPS, DEFAULT_MAP_TILES, type MapTileId } from './basemap';
-import { cabCameraFov, cabCameraPose, defaultFixedCameraView, fixedCameraFov, fixedCameraPose, rotateFixedCamera, zoomFixedCamera } from './cameraPose';
+import { cabCameraFov, cabCameraPose, defaultFixedCameraView, fixedCameraFov, fixedCameraPose, rotateFixedCamera, zoomFixedCamera, zoomFixedCameraByScale } from './cameraPose';
 import { createGcj02ImageryProvider } from './gcj02ImageryProvider';
 import { RailRenderer } from './RailRenderer';
 import { SceneryManager } from './SceneryManager';
@@ -17,6 +17,14 @@ import { TrainRenderer } from './TrainRenderer';
 import { CabRenderer } from './CabRenderer';
 import { offsetPoint } from '../utils/geo';
 import { withTimeout } from '../utils/assets';
+
+// Cesium emits this shape for PINCH_MOVE although its d.ts declares TwoPointMotionEvent.
+type FixedPinchMoveEvent = {
+  distance: {
+    startPosition: Cartesian2;
+    endPosition: Cartesian2;
+  };
+};
 
 export class CesiumMap {
   viewer!: Viewer;
@@ -46,7 +54,9 @@ export class CesiumMap {
   private cameraMode: CameraMode = 'cab';
   private fixedView = defaultFixedCameraView();
   private fixedDragging = false;
+  private fixedPinching = false;
   private stopFixedDrag = (): void => { this.fixedDragging = false; };
+  private stopFixedInteraction = (): void => { this.fixedDragging = false; this.fixedPinching = false; };
   private defaultFov = Math.PI / 3;
   private cabHeading?: number;
   private removeBeforeUpdate?: () => void;
@@ -308,7 +318,7 @@ export class CesiumMap {
 
   setCameraMode(mode: CameraMode): void {
     if (mode === 'fixed' && this.cameraMode !== mode) this.fixedView = defaultFixedCameraView();
-    this.stopFixedDrag();
+    this.stopFixedInteraction();
     this.cameraMode = mode;
     this.cameraTarget = undefined;
     this.cabHeading = undefined;
@@ -336,27 +346,40 @@ export class CesiumMap {
       this.cabRenderer?.destroy();
       this.clearProvinceRailway();
     }
-    window.removeEventListener('blur', this.stopFixedDrag);
+    window.removeEventListener('blur', this.stopFixedInteraction);
     this.handler?.destroy();
     if (this.viewer && !this.viewer.isDestroyed()) this.viewer.destroy();
   }
 
   private setupPicking(): void {
     this.handler = new ScreenSpaceEventHandler(this.viewer.scene.canvas);
-    window.addEventListener('blur', this.stopFixedDrag);
+    window.addEventListener('blur', this.stopFixedInteraction);
     // Cesium maps a single touch to LEFT_DOWN / MOUSE_MOVE / LEFT_UP, including cancellation.
     this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
       this.downPosition = Cartesian2.clone(event.position);
-      this.fixedDragging = this.cameraMode === 'fixed' && !!this.session?.running;
+      this.fixedDragging = !this.fixedPinching && this.cameraMode === 'fixed' && !!this.session?.running;
     }, ScreenSpaceEventType.LEFT_DOWN);
     this.handler.setInputAction(this.stopFixedDrag, ScreenSpaceEventType.LEFT_UP);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.MotionEvent) => {
-      if (!this.fixedDragging || this.cameraMode !== 'fixed' || !this.session?.running) return;
+      if (!this.fixedDragging || this.fixedPinching || this.cameraMode !== 'fixed' || !this.session?.running) return;
       rotateFixedCamera(this.fixedView, event.endPosition.x - event.startPosition.x, event.endPosition.y - event.startPosition.y);
     }, ScreenSpaceEventType.MOUSE_MOVE);
     this.handler.setInputAction((delta: number) => {
       if (this.cameraMode === 'fixed' && this.session?.running) zoomFixedCamera(this.fixedView, delta);
     }, ScreenSpaceEventType.WHEEL);
+    this.handler.setInputAction(() => {
+      // A second finger must stop the one-finger rotate gesture before pinch begins.
+      this.fixedDragging = false;
+      this.fixedPinching = this.cameraMode === 'fixed' && !!this.session?.running;
+    }, ScreenSpaceEventType.PINCH_START);
+    this.handler.setInputAction((event: ScreenSpaceEventHandler.TwoPointMotionEvent) => {
+      if (!this.fixedPinching || this.cameraMode !== 'fixed' || !this.session?.running) return;
+      const pinch = event as unknown as FixedPinchMoveEvent;
+      const start = pinch.distance?.startPosition.y ?? 0;
+      const end = pinch.distance?.endPosition.y ?? 0;
+      if (start > 0 && end > 0) zoomFixedCameraByScale(this.fixedView, end / start);
+    }, ScreenSpaceEventType.PINCH_MOVE);
+    this.handler.setInputAction(() => { this.fixedPinching = false; }, ScreenSpaceEventType.PINCH_END);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
       if (!this.downPosition || Cartesian2.distance(this.downPosition, event.position) > 5) return;
       const picked = this.viewer.scene.pick(event.position);

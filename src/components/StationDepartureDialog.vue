@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { StationDeparture, StationDepartureLine } from '../types';
-import { lineBearing } from '../data/stationDeparture';
+import { lineBearing, stationDisplayName } from '../data/stationDeparture';
 import { compassDirection } from '../utils/geo';
 import StationDepartureMap from './StationDepartureMap.vue';
 
@@ -57,26 +57,20 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
   <div class="modal-backdrop departure-backdrop">
     <section class="departure-dialog" role="dialog" aria-modal="true" aria-labelledby="departure-title">
       <header class="departure-header">
-        <div>
+        <div class="departure-heading">
           <p class="eyebrow">STATION DEPARTURE · 车站始发</p>
-          <h2 id="departure-title">选择始发线路与方向</h2>
-          <p class="departure-station">
-            {{ departure.station.name }} <span>{{ departure.station.telecode }}</span> · {{ departure.station.province }} {{ departure.station.city }}
-          </p>
+          <div class="departure-title-row">
+            <h2 id="departure-title">选择始发线路与方向</h2>
+            <p class="departure-station">
+              <b>{{ stationDisplayName(departure.station.name) }}</b> <span>{{ departure.station.telecode }}</span> · {{ departure.station.province }} {{ departure.station.city }}
+            </p>
+          </div>
         </div>
         <button class="departure-close" aria-label="返回重新选站" @click="$emit('close')">×</button>
       </header>
 
       <div class="departure-body">
         <section class="departure-map-panel" aria-label="车站周边线路图">
-          <div class="departure-section-head">
-            <div>
-              <h3>车站周边线路图</h3>
-              <p>直接点击线路选择始发位置；可滚轮缩放、拖动平移。</p>
-            </div>
-            <span class="departure-map-hint">点击线路选择</span>
-          </div>
-
           <StationDepartureMap :departure="departure" :selected="selected" :direction="direction" @select="selectLine" />
 
           <div class="departure-legend" aria-label="地图图例">
@@ -85,7 +79,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
             <span><i class="legend-node" />车站</span>
             <span><i class="legend-arrow">↑</i>运行方向</span>
           </div>
-          <p class="departure-caption">高德底图使用 GCJ-02；线路只在显示层转换为 GCJ-02 配准，区段、车站和存档仍为 WGS84。底图仅作地理参考，不表示真实站场、线路占用或信号；数据无法判定上下行，方向只按地理方位显示。</p>
         </section>
 
         <aside class="departure-choice-panel" aria-label="始发线路与方向">
@@ -142,8 +135,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
             </div>
             <p class="departure-note">直接吸附到离车站最近的线路并立即出发。数据不能区分正线与侧线，最近线路不一定是正线。</p>
           </section>
-
-          <p class="departure-fine-print">方向仅决定初始朝向；不推断真实上行/下行、站场归属或线路用途。确认后列车以驻车状态停在线路距站最近点。</p>
         </aside>
       </div>
     </section>
@@ -152,22 +143,24 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 
 <style scoped>
 .departure-backdrop { z-index: 20; padding: 18px; background: rgba(5, 7, 5, .72); }
-.departure-dialog { display: flex; flex-direction: column; width: min(1180px, calc(100vw - 36px)); height: min(86vh, 840px); max-height: min(94vh, 900px); overflow: hidden; padding: 0; border: 1px solid rgba(216, 255, 98, .72); background: #131913; box-shadow: 0 30px 120px rgba(0, 0, 0, .58), 0 0 90px rgba(216, 255, 98, .08); text-align: left; }
-.departure-header { display: flex; flex: 0 0 auto; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 20px 26px 16px; border-bottom: 1px solid var(--line); background: linear-gradient(135deg, #1a231a, #121812 72%); }
-.departure-dialog .eyebrow { margin: 0 0 5px; color: var(--accent); font-size: 10px; letter-spacing: 2px; }
-.departure-dialog h2 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -.7px; }
-.departure-station { margin: 7px 0 0; color: #b3bdb0; font-size: 11px; }
-.departure-station span { margin: 0 4px; color: var(--accent); font-family: 'Barlow Condensed', sans-serif; letter-spacing: 1px; }
+.departure-dialog { display: flex; flex-direction: column; width: min(1180px, calc(100vw - 36px)); height: min(92vh, 960px); max-height: min(97vh, 1040px); overflow: hidden; padding: 0; border: 1px solid rgba(216, 255, 98, .72); background: #131913; box-shadow: 0 30px 120px rgba(0, 0, 0, .58), 0 0 90px rgba(216, 255, 98, .08); text-align: left; }
+.departure-header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 20px; padding: 12px 22px 11px; border-bottom: 1px solid var(--line); background: linear-gradient(135deg, #1a231a, #121812 72%); }
+.departure-heading { min-width: 0; }
+.departure-dialog .eyebrow { margin: 0 0 2px; color: var(--accent); font-size: 9px; letter-spacing: 1.8px; }
+.departure-dialog h2 { margin: 0; font-size: 22px; font-weight: 600; line-height: 1.15; letter-spacing: -.7px; }
+.departure-title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 16px; min-width: 0; }
+.departure-station { min-width: 0; margin: 0; padding-left: 14px; border-left: 1px solid rgba(255, 255, 255, .14); color: #b3bdb0; font-size: 17px; line-height: 1.4; }
+.departure-station b { color: #e4ecdd; font-size: 18px; font-weight: 600; }
+.departure-station span { margin: 0 5px; color: var(--accent); font-family: 'Barlow Condensed', sans-serif; font-size: 16px; letter-spacing: 1px; }
 .departure-close { width: 34px; height: 34px; flex-shrink: 0; border: 1px solid var(--line); background: transparent; color: #b8bdb5; font-size: 22px; line-height: 1; }
 .departure-close:hover { border-color: var(--accent); color: var(--accent); }
-.departure-body { display: grid; flex: 1; grid-template-columns: minmax(0, 1.65fr) minmax(330px, .85fr); min-height: 0; }
-.departure-map-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 16px 20px 13px; background: #0f1510; }
-.departure-choice-panel { display: flex; flex-direction: column; gap: 14px; min-width: 0; min-height: 0; padding: 16px 18px 15px; overflow-y: auto; border-left: 1px solid var(--line); background: #151c16; }
+.departure-body { display: grid; flex: 1; grid-template-columns: minmax(0, 2.35fr) minmax(292px, .65fr); min-height: 0; }
+.departure-map-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 12px 18px 12px; background: #0f1510; }
+.departure-choice-panel { display: flex; flex-direction: column; gap: 13px; min-width: 0; min-height: 0; padding: 14px 16px 15px; overflow-y: auto; border-left: 1px solid var(--line); background: #151c16; }
 .departure-section-head { display: flex; flex: 0 0 auto; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 9px; }
 .departure-section-head h3 { margin: 0; color: #e8efe2; font-size: 13px; font-weight: 600; letter-spacing: .2px; }
 .departure-section-head p { margin: 4px 0 0; color: #8e9a89; font-size: 9px; line-height: 1.55; }
-.departure-map-hint { flex-shrink: 0; padding: 4px 7px; border: 1px solid rgba(127, 221, 231, .25); color: #92e0e8; background: rgba(127, 221, 231, .05); font-size: 9px; white-space: nowrap; }
-.departure-map-panel .station-map-host { flex: 1; min-height: 280px; }
+.departure-map-panel .station-map-host { flex: 1; min-height: 420px; }
 .departure-legend { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 7px 15px; margin-top: 9px; color: #9da99a; font-size: 9px; }
 .departure-legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .departure-legend i { display: inline-block; flex-shrink: 0; }
@@ -176,7 +169,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 .legend-line.selected { height: 4px; background: var(--accent); box-shadow: 0 0 7px rgba(216, 255, 98, .5); }
 .legend-node { width: 7px; height: 7px; border-radius: 50%; background: #f4f8ee; box-shadow: 0 0 0 2px rgba(216, 255, 98, .4); }
 .legend-arrow { color: #d8ff62; font-size: 11px; font-style: normal; line-height: 1; }
-.departure-caption { flex: 0 0 auto; margin: 7px 0 0; color: #778374; font-size: 9px; line-height: 1.55; }
 .departure-block { flex: 0 0 auto; }
 .line-summary { padding: 10px 11px; border: 1px solid rgba(216, 255, 98, .35); background: rgba(216, 255, 98, .06); }
 .line-summary strong { display: block; color: #eef4e8; font-size: 12px; font-weight: 600; }
@@ -201,25 +193,23 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 .quick-grid button:disabled { opacity: .45; }
 .quick-grid .dir-arrow { width: auto; font-size: 16px; }
 .departure-note { margin: 7px 0 0; color: #7d8979; font-size: 8.5px; line-height: 1.55; }
-.departure-fine-print { margin: auto 0 0; padding-top: 10px; color: #7d8979; font-size: 8.5px; line-height: 1.6; border-top: 1px solid var(--line); }
 @media (max-width: 940px) {
   .departure-dialog { width: calc(100vw - 24px); height: auto; max-height: 94vh; overflow-y: auto; }
   .departure-body { display: flex; flex-direction: column; }
-  .departure-map-panel { flex: 0 0 auto; padding: 14px 16px 12px; }
-  .departure-map-panel .station-map-host { flex: 0 0 380px; height: 380px; min-height: 380px; }
+  .departure-map-panel { flex: 0 0 auto; padding: 12px 16px 11px; }
+  .departure-map-panel .station-map-host { flex: 0 0 460px; height: 460px; min-height: 460px; }
   .departure-choice-panel { flex: 0 0 auto; border-top: 1px solid var(--line); border-left: 0; padding: 14px 16px 16px; }
-  .departure-fine-print { margin-top: 4px; }
 }
 @media (max-width: 620px) {
   .departure-backdrop { padding: 8px; }
   .departure-dialog { width: 100%; max-height: calc(100dvh - 16px); }
-  .departure-header { padding: 13px 14px 11px; }
-  .departure-dialog h2 { font-size: 20px; }
-  .departure-map-panel { padding: 12px 12px 10px; }
-  .departure-map-panel .station-map-host { flex-basis: 320px; height: 320px; min-height: 300px; }
+  .departure-header { padding: 11px 14px 10px; }
+  .departure-dialog h2 { font-size: 19px; }
+  .departure-title-row { gap: 10px; }
+  .departure-station { padding-left: 10px; }
+  .departure-map-panel { padding: 10px 12px 10px; }
+  .departure-map-panel .station-map-host { flex-basis: 380px; height: 380px; min-height: 340px; }
   .departure-choice-panel { padding: 12px 12px 14px; }
-  .departure-map-hint { display: none; }
-  .departure-caption { font-size: 8px; }
   .direction-grid { grid-template-columns: 1fr 1fr; }
 }
 </style>

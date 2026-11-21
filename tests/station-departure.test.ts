@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildStationDeparture, lineBearing, lineWindow } from '../src/data/stationDeparture';
+import { buildStationDeparture, lineBearing, lineWindow, stationDisplayName } from '../src/data/stationDeparture';
 import { RailNetwork } from '../src/data/railway';
 import { GameSession } from '../src/core/session';
 import type { ProvinceInfo, RailSegment, Station } from '../src/types';
@@ -23,6 +23,14 @@ async function networkFrom(features: unknown[]): Promise<RailNetwork> {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('车站显示名', () => {
+  it('在缺少“站”后缀时补齐，已有“站”时不重复', () => {
+    expect(stationDisplayName('南京')).toBe('南京站');
+    expect(stationDisplayName('南京南')).toBe('南京南站');
+    expect(stationDisplayName('测试站')).toBe('测试站');
+  });
+});
 
 describe('车站始发线路快照', () => {
   it('按距站距离列出线路，只截取局部显示几何，且不触发全网络拓扑', async () => {

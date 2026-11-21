@@ -43,8 +43,11 @@ export function cabCameraFov(width: number, height: number): number {
 }
 
 export interface FixedCameraView {
+  /** Relative altitude of the camera above the train head. */
   height: number;
+  /** View heading offset from the train heading. It must not move the camera. */
   yaw: number;
+  /** View pitch in degrees. It must not move the camera. */
   pitch: number;
 }
 
@@ -52,29 +55,53 @@ export function defaultFixedCameraView(): FixedCameraView {
   return { height: APP_CONFIG.camera.fixedView.height, yaw: 0, pitch: APP_CONFIG.camera.fixedView.pitchDegrees };
 }
 
-/** Orbit around the train while retaining its initial position below the optical axis. */
+/**
+ * Drag rotates the camera in place: it changes only the viewing direction.
+ * The horizontal/vertical signs are intentionally opposite to the previous
+ * orbit-style logic: dragging right looks right, dragging down looks down.
+ */
 export function rotateFixedCamera(view: FixedCameraView, dx: number, dy: number): void {
   const sensitivity = APP_CONFIG.camera.fixedView.dragDegreesPerPixel;
-  view.yaw = ((view.yaw - dx * sensitivity) % 360 + 360) % 360;
-  view.pitch = Math.max(-65, Math.min(10, view.pitch + dy * sensitivity));
+  view.yaw = ((view.yaw + dx * sensitivity) % 360 + 360) % 360;
+  view.pitch = Math.max(-65, Math.min(10, view.pitch - dy * sensitivity));
 }
 
-/** Cesium wheel delta is positive toward the user (zoom in). */
+/**
+ * Wheel zoom changes the camera height and, through `fixedCameraPose`, its
+ * rearward distance; it never changes the viewing direction.
+ * Cesium wheel delta is positive toward the user (zoom in).
+ */
 export function zoomFixedCamera(view: FixedCameraView, delta: number): void {
   const config = APP_CONFIG.camera.fixedView;
   view.height = Math.max(config.minHeight, Math.min(config.maxHeight,
     view.height * Math.exp(-delta * config.zoomSensitivity)));
 }
 
-/** Defaults preserve the original 30° elevation, -10° pitch and 50° vertical lens. */
+/**
+ * Touch pinch zoom uses the same height/position model as the wheel:
+ * fingers moving apart (scale > 1) lower the camera, fingers together raise it.
+ * The viewing direction is untouched.
+ */
+export function zoomFixedCameraByScale(view: FixedCameraView, scale: number): void {
+  if (!Number.isFinite(scale) || scale <= 0) return;
+  const config = APP_CONFIG.camera.fixedView;
+  view.height = Math.max(config.minHeight, Math.min(config.maxHeight, view.height / scale));
+}
+
+/**
+ * The camera position is determined only by the train head and the wheel-controlled
+ * height: it stays directly behind the train at the configured 30° elevation.
+ * View yaw/pitch rotate the camera in place, so dragging never moves it.
+ */
 export function fixedCameraPose(head: LonLat & { height: number }, trainHeading: number,
   view: FixedCameraView = defaultFixedCameraView()): FixedCameraPose {
   const config = APP_CONFIG.camera.fixedView;
-  const elevation = (config.elevationDegrees + config.pitchDegrees - view.pitch) * Math.PI / 180;
+  const elevation = config.elevationDegrees * Math.PI / 180;
   const behind = view.height / Math.tan(elevation);
-  const heading = trainHeading + view.yaw;
+  const heading = ((trainHeading + view.yaw) % 360 + 360) % 360;
+  // The position uses the train heading, never the view yaw.
   // offsetPoint uses east=0°, unlike Cesium's north=0°.
-  const position = offsetPoint(head, heading + 90, behind);
+  const position = offsetPoint(head, trainHeading + 90, behind);
   return {
     lon: position.lon,
     lat: position.lat,

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { StationRepository } from '../data/stations';
+import { stationRegionLabel, type StationRepository } from '../data/stations';
+import ProvinceMap from './ProvinceMap.vue';
 import type { ProvinceInfo, Station, StationResult } from '../types';
 import { isStation } from '../types';
 
@@ -17,6 +18,9 @@ const allResults = computed<Station[]>(() => props.stations.search(query.value, 
 const results = computed(() => allResults.value.slice(0, limit.value));
 watch([query, city], () => { limit.value = 60; });
 watch(() => props.selectedProvince, () => { city.value = ''; limit.value = 60; });
+// 澳门数据集没有车站记录，无法进入“车站出发”流程，不列入始发省份选择。
+const HIDDEN_START_PROVINCES = ['澳门特别行政区'];
+const selectableProvinces = computed(() => props.provinces.filter(item => !HIDDEN_START_PROVINCES.includes(item.province)));
 const cities = computed(() => props.stations.cities(props.selectedProvince));
 const stationCount = computed(() => {
   const counts = new Map<string, number>();
@@ -34,24 +38,28 @@ function choose(station: StationResult): void {
 </script>
 
 <template>
-  <section class="panel new-game-panel">
+  <section class="panel new-game-panel" :class="{ 'province-map-mode': step === 'province' }">
     <header class="panel-header">
-      <div><p class="eyebrow">NEW JOURNEY / 新旅程</p><h2>{{ step === 'province' ? '第一步 · 选择省份' : '选择出发位置' }}</h2></div>
+      <div><p class="eyebrow">NEW JOURNEY / 新旅程</p><h2 :class="{ compact: step === 'preview' }">{{ step === 'province' ? '第一步 · 选择省份' : '选择出发位置' }}</h2></div>
       <button class="icon-button" aria-label="关闭" @click="$emit('close')">×</button>
     </header>
 
-    <!-- 第一步：先点选一个具体省份，才会加载线路并进入地图预览。 -->
+    <!-- 第一步：在省级行政区划图上点选省份，加载该省线路并进入地图预览。 -->
     <div v-if="step === 'province'" class="panel-body province-step">
-      <p class="form-label">01 / 点选省份（{{ provinces.length }} 个省级线路数据）</p>
-      <div class="province-grid tall" aria-label="省份列表">
-        <button v-for="item in provinces" :key="item.adcode" :disabled="busy" @click="chooseProvince(item)">
-          <strong>{{ item.short_name }}</strong>
-          <small>{{ stationCount.get(item.province) ?? 0 }} 站 · {{ (item.size_bytes / 1048576).toFixed(1) }} MB</small>
-        </button>
+      <ProvinceMap
+        :provinces="provinces"
+        :station-counts="stationCount"
+        :hidden="HIDDEN_START_PROVINCES"
+        :selected="selectedProvince"
+        @select="chooseProvince"
+      />
+      <div class="province-map-meta">
+        <a class="province-map-source" href="https://github.com/Supeset/China-GeoData" target="_blank" rel="noopener noreferrer">省界示意图 © China-GeoData (MIT)</a>
       </div>
-      <div class="map-instruction">
-        <span class="step-number">02</span>
-        <div><strong>进入省份地图预览</strong><p>选定后仅加载该省线路，进入该省地图预览：可搜索该省车站，或在地图上点选位置开始驾驶。不读取全国合并文件。</p></div>
+      <div class="province-compact-list" aria-label="省份快速选择">
+        <button v-for="item in selectableProvinces" :key="item.adcode" :disabled="busy" @click="chooseProvince(item)">
+          <strong>{{ item.short_name }}</strong><small>{{ stationCount.get(item.province) ?? 0 }} 站</small>
+        </button>
       </div>
     </div>
 
@@ -79,13 +87,12 @@ function choose(station: StationResult): void {
         <div class="station-results">
           <button v-for="station in results" :key="station.telecode" class="station-row" :disabled="busy" @click="choose(station)">
             <span class="station-code">{{ station.telecode }}</span>
-            <span class="station-name"><strong>{{ station.name }}</strong><small>{{ station.province }} · {{ station.city }}</small></span>
+            <span class="station-name"><strong>{{ station.name }}</strong><small>{{ stationRegionLabel(station) }}</small></span>
             <span class="row-arrow">→</span>
           </button>
           <button v-if="results.length < allResults.length" class="button button-ghost full-width" @click="limit += 60">显示更多车站（已显示 {{ results.length }}）</button>
           <p v-if="!results.length" class="empty-state">该省份没有匹配的车站，可改用地图选点</p>
         </div>
-        <p class="fine-print">检索范围已限定为{{ selectedProvince }}；也可直接点击预览地图上的车站圆点出发。</p>
       </div>
       <div v-else class="panel-body map-picker">
         <div class="map-instruction ready">
@@ -100,6 +107,5 @@ function choose(station: StationResult): void {
         <p class="fine-print">最大吸附距离 5 km，超出会明确失败并保留在预览。无坐标车站及非国铁线路不会作为出生点。</p>
       </div>
     </template>
-    <footer class="panel-footer"><span class="status-dot online" />{{ busy ? '正在读取与构建线路拓扑' : '数据仅保存在你的浏览器中' }}</footer>
   </section>
 </template>

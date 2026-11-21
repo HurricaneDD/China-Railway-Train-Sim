@@ -61,6 +61,11 @@ export function buildStationDeparture(network: RailNetwork, station: Station): S
   };
 }
 
+/** Source station names omit the display suffix "站"; add it once for the UI. */
+export function stationDisplayName(name: string): string {
+  return name.endsWith('站') ? name : `${name}站`;
+}
+
 /** Bearing of the chosen travel direction along the original coordinate array. */
 export function lineBearing(line: StationDepartureLine, direction: 1 | -1): number {
   return direction > 0 ? line.heading : (line.heading + 180) % 360;

@@ -10,6 +10,22 @@ interface StationDataset {
 /** Injectable so nested tools can resolve their own data path; main app uses fetchJson. */
 export type StationJsonFetcher = <T>(path: string) => Promise<T>;
 
+const MUNICIPALITIES = new Set(['北京市', '上海市', '天津市', '重庆市']);
+
+/**
+ * Province/city caption for station lists. Municipalities repeat the same name
+ * in province and city, so use the district parsed from the leading address.
+ * Falls back to the single municipality name when the address has no district.
+ */
+export function stationRegionLabel(station: Pick<Station, 'province' | 'city' | 'address'>): string {
+  if (!MUNICIPALITIES.has(station.province)) return `${station.province} · ${station.city}`;
+  if (station.address?.startsWith(station.province)) {
+    const district = station.address.slice(station.province.length).match(/^(.+?[区县])/)?.[1];
+    if (district) return `${station.province} ${district}`;
+  }
+  return station.province;
+}
+
 export class StationRepository {
   stations: Station[] = [];
   pending: PendingStation[] = [];

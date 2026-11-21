@@ -35,14 +35,16 @@ describe('三维地图车站站名标注', () => {
     expect(stations.map(entry => entry.telecode)).toEqual(['A', 'B', 'C', 'D', 'BAD']);
   });
 
-  it('站名截断且宽度估算考虑中英文差异', () => {
+  it('站名补“站”、超长截断，宽度估算考虑中英文差异', () => {
     const longName = '这是一个超过十四个字的超长车站名称';
     const label = stationLabelText(longName);
     expect(label.length).toBeLessThanOrEqual(14);
-    expect(label.endsWith('…')).toBe(true);
-    expect(stationLabelText('  南京南  ')).toBe('南京南');
-    expect(stationLabelWidth('南京南')).toBeGreaterThan(stationLabelWidth('京'));
+    expect(label.endsWith('…站')).toBe(true);
+    expect(stationLabelText('  南京南  ')).toBe('南京南站');
+    expect(stationLabelText('南京南站')).toBe('南京南站');
+    expect(stationLabelWidth('南京南站')).toBeGreaterThan(stationLabelWidth('京'));
     expect(stationLabelWidth('Nanjing')).toBeGreaterThan(stationLabelWidth('N'));
+    expect(APP_CONFIG.stationLabels.fontSize).toBeGreaterThanOrEqual(16);
   });
 
   it('标签屏幕框位于站点上方，重叠时保留优先级更高的标签', () => {

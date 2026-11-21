@@ -34,8 +34,8 @@ export const APP_CONFIG = {
     maxVisibleLabels: 60,
     /** 标签防重叠重算间隔，单位毫秒。 */
     labelUpdateIntervalMs: 200,
-    fontSize: 13,
-    labelHeight: 20,
+    fontSize: 16,
+    labelHeight: 26,
     labelOffsetY: 12,
     /** 站点显示高度（米，相对地形表面）；同时供标签屏幕投影使用。 */
     markerHeight: 30,
@@ -86,7 +86,9 @@ export const APP_CONFIG = {
       taperStartKmh: 12,
       crawlSpeedKmh: 15,
       targetAcceleration: 0.15,
-      maxTotalForce: 750_000,
+      // 4,000 kN 高于当前 346 t 编组的整列重力（约 3.39 MN），因此坡道力本身
+      // 永远不会先撞上这个上限；它仍作为异常输入时的数值保护。
+      maxTotalForce: 4_000_000,
       exitSeconds: 1,
     },
   },
@@ -125,7 +127,7 @@ export const APP_CONFIG = {
     maxRange: 900,
     smoothing: 5,
     // “第三人称固定”：默认后上方 30°、高于车头 150 m、俯角 -10°。
-    // 拖动调整绕车方位和俯仰，滚轮调整相对车头高度，继续随车跟随。
+    // 左键/单指拖动只转动镜头朝向，不移动相机；滚轮/双指捏合调整相对车头高度并同步改变位置。
     // 车头位于视轴下方 20°，因此该视角使用 50° 竖直视场，避免列车落到画面外。
     fixedView: {
       elevationDegrees: 30,

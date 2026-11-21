@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import DrivingHud from './components/DrivingHud.vue';
 import HomeBackdrop from './components/HomeBackdrop.vue';
 import JunctionDialog from './components/JunctionDialog.vue';
@@ -14,6 +14,7 @@ import { HornAudio } from './core/audio';
 import { GameSession } from './core/session';
 import { loadSettings, saveSettings, saveStore, validateGameSave } from './core/storage';
 import { buildStationDeparture, lineBearing } from './data/stationDeparture';
+import type { ProvinceLoadProgress } from './data/railway';
 import type { CesiumMap } from './map/CesiumMap';
 import type { CameraMode, GameSave, LonLat, Reverser, Station, StationDeparture, StationDepartureLine } from './types';
 import { compassDirection, distance } from './utils/geo';
@@ -33,6 +34,33 @@ const hasSave = ref(false);
 const saves = ref<GameSave[]>([]);
 const settings = ref<GameSettings>(loadSettings());
 const selectedProvince = ref('');
+interface ProvinceLoadingState { province: string; percent: number; detail: string }
+const provinceLoading = ref<ProvinceLoadingState | null>(null);
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (!bytes || bytes <= 0) return '未知';
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+function provinceProgressPercent(progress: ProvinceLoadProgress): number {
+  if (progress.phase === 'download') return 2 + Math.min(1, progress.ratio) * 74;
+  if (progress.phase === 'parse') return 76 + Math.min(1, progress.ratio) * 20;
+  return 97;
+}
+
+function provinceProgressDetail(progress: ProvinceLoadProgress): string {
+  if (progress.phase === 'download') {
+    return `正在下载线路数据 · ${formatBytes(progress.loadedBytes)} / ${formatBytes(progress.totalBytes)}`;
+  }
+  if (progress.phase === 'parse') {
+    if (!progress.featuresTotal) return '正在解析线路几何';
+    const done = (progress.featuresDone ?? 0).toLocaleString('zh-CN');
+    const total = progress.featuresTotal.toLocaleString('zh-CN');
+    return `正在解析线路几何 · ${done} / ${total} 条`;
+  }
+  return '线路数据已就绪，正在准备地图预览';
+}
 const selectingMap = ref(false);
 const departure = ref<StationDeparture | null>(null);
 const userPaused = ref(false);
@@ -161,22 +189,31 @@ function resetProvince(): void {
 async function selectProvince(name: string): Promise<void> {
   if (busy.value || !name) return;
   busy.value = true;
+  provinceLoading.value = { province: name, percent: 0, detail: '正在准备线路数据' };
   try {
-    await session.railway.load(name);
+    await session.railway.load(name, (progress) => {
+      provinceLoading.value = { province: name, percent: provinceProgressPercent(progress), detail: provinceProgressDetail(progress) };
+    });
+    const provinceStations = session.stations.stations.filter((station) => station.province === name);
+    provinceLoading.value = { province: name, percent: 99, detail: `正在载入 ${provinceStations.length} 个有坐标车站并绘制预览` };
     // 数据加载成功后才切换到预览步骤；失败时停留在省份选择，便于重试。
     selectedProvince.value = name;
     selectingMap.value = false;
-    const provinceStations = session.stations.stations.filter((station) => station.province === name);
     map.value?.showStations(provinceStations);
     const segments = [...session.railway.network.segments.values()].filter((segment) => segment.properties.province === name);
     map.value?.showProvinceRailway(segments);
     armProvincePicking();
+    await nextTick();
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    provinceLoading.value = { province: name, percent: 100, detail: '加载完成，正在进入省份地图预览' };
+    await new Promise<void>((resolve) => setTimeout(resolve, 120));
     if (!provinceStations.length) {
       notify('该省份没有带坐标车站，可在已有线路区域直接选点');
     }
   } catch (error) {
     notify(error instanceof Error ? error.message : '线路加载失败', true);
   } finally {
+    provinceLoading.value = null;
     busy.value = false;
   }
 }
@@ -496,7 +533,18 @@ async function retryData(): Promise<void> {
       <SavePanel v-if="overlay === 'saves'" :saves="saves" :busy="busy" :in-game="session.running" @close="overlay = null" @load="loadSave" @delete="deleteSave" @save="namedSave" @export="exportSave" @import="importSave" />
       <SettingsPanel v-else :settings="settings" @close="overlay = null" @change="changeSettings" />
     </div>
-    <div v-if="busy" class="loading-indicator"><span class="spinner" />正在处理线路数据</div>
+    <div v-if="busy && !provinceLoading" class="loading-indicator"><span class="spinner" />正在处理线路数据</div>
+    <div v-if="provinceLoading" class="province-loading" role="status" aria-live="polite" aria-busy="true">
+      <section class="province-loading-card">
+        <p class="eyebrow">PROVINCE DATA · 省份数据</p>
+        <h2>正在加载线路和车站数据…</h2>
+        <p class="province-loading-province">{{ provinceLoading.province }}</p>
+        <div class="province-loading-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="Math.round(provinceLoading.percent)" :aria-valuetext="provinceLoading.detail">
+          <div class="province-loading-fill" :style="{ width: `${Math.max(2, provinceLoading.percent)}%` }" />
+        </div>
+        <div class="province-loading-meta"><span>{{ provinceLoading.detail }}</span><b>{{ Math.round(provinceLoading.percent) }}%</b></div>
+      </section>
+    </div>
     <div v-if="toastMessage" class="toast" :class="toastKind" role="status">{{ toastMessage }}<button @click="toastMessage = ''">×</button></div>
   </div>
 </template>
