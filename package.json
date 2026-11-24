@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc -b && vite build",
+    "build": "vue-tsc -b && vite build && npm run verify:dist",
+    "verify:dist": "node scripts/verify-dist.mjs",
     "preview": "vite preview",
     "test": "vitest run"
   },

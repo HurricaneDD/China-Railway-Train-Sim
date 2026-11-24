@@ -25,7 +25,7 @@ npm run preview
 
 运行按需读取 data/geojson/ 下的 33 个分省文件，不读取全国合并文件。超过 GitHub 单文件限制的 data/cnrailway.geojson 不纳入 Git，已有本地副本不受影响。数据字段、来源和许可见 [data/README.md](data/README.md)。
 
-仓库包含 GitHub Pages Actions 工作流。仓库设置中将 Pages Source 设为 GitHub Actions 后，推送 main 会触发构建部署。应用使用相对 base，支持仓库子路径。
+仓库包含 GitHub Pages Actions 工作流。**GitHub Settings → Pages → Build and deployment → Source 必须选择 GitHub Actions**，不能选择 “Deploy from a branch”（尤其不能指向 `drive:/`）。分支根目录的 `index.html` 是 Vite 源码入口，直接由 Pages 提供时浏览器会请求 `/src/main.ts`，因路径不存在或 MIME 类型不是 JavaScript 而显示白屏；只有构建后的 `dist/` 才是可运行产物。工作流使用 Node 22 执行 `npm ci`、`npm run build`（其中 `verify:dist` 校验主应用构建入口、Cesium 资源、33 个分省数据和检查页），再上传 `dist`。推送 `main` 或 `drive` 后访问 https://hurricanedd.github.io/China-Railway-Train-Sim/。应用使用相对 base，支持仓库子路径。
 
 ## 线路人工检查
 

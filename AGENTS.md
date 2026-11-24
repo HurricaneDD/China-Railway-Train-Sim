@@ -34,7 +34,8 @@
 ```bash
 npm install       # 安装项目依赖
 npm run dev       # Vite 开发环境
-npm run build     # vue-tsc 类型检查 + Vite 构建 + 复制运行数据
+npm run build     # 类型检查 + Vite 构建 + 复制运行数据 + dist 产物校验
+npm run verify:dist # 仅校验已生成的 dist（构建脚本会自动调用）
 npm test          # Vitest 核心逻辑测试
 npm run preview   # 本地预览 dist，仅用于开发验证
 ```
@@ -324,15 +325,16 @@ China-Railway-Train-Sim-Kimi/
 
 ## 5. GitHub Pages 构建与部署
 
-1. 仓库 GitHub Settings → Pages → Source 选择 **GitHub Actions**。
-2. 推送 `main` 或手动运行 `Deploy to GitHub Pages` workflow。
-3. workflow 使用 Node 22 和锁文件缓存，执行 `npm ci --no-audit --no-fund` 与 `npm run build`，上传 `dist`。
+1. 仓库 GitHub Settings → Pages → Build and deployment → Source 必须选择 **GitHub Actions**。不能选择 **Deploy from a branch**（例如 `drive:/`）：分支根目录的 `index.html` 是 Vite 源码入口，直接由 Pages 提供时浏览器会请求 `/src/main.ts`，因路径不存在或 MIME 类型不是 JavaScript 而白屏。2026-11-24 已通过 Pages API 将本仓库从 `build_type=legacy`（`drive:/`）切换为 `workflow`。
+2. 推送 `main` / `drive` 或手动运行 `Deploy to GitHub Pages` workflow。
+3. workflow 使用 Node 22 和锁文件缓存，执行 `npm ci --no-audit --no-fund` 与 `npm run build`（构建后自动运行 `node scripts/verify-dist.mjs`），上传 `dist`。
 4. `base: './'` 让应用可部署在 `/<仓库名>/`，`assets.ts` 通过 `document.baseURI + import.meta.env.BASE_URL` 解析数据地址。检查页位于嵌套路径，使用注入的 `JsonFetcher` 以 `../../data/` 读取，不沿用主应用 BASE_URL。
 5. `vite-plugin-cesium` 负责 Cesium Workers/Assets/Widgets 等静态资源；不得只复制 JS 而漏掉这些文件。
 6. 自定义 Vite 插件仅复制 `stations.json`、`provinces_index.json`、`geojson/` 和数据说明，并生成 `.nojekyll`。
 7. 不启用历史路由，刷新不存在服务端路由回退问题。`vite.config.ts` 使用多页面输入：主应用 `index.html` 和检查页 `dev/railway-check/index.html`；`railway-check-html` 在 `order: post` 阶段移除注入检查页的 Cesium CSS/JS，检查页自身不依赖 Cesium。
 8. 已生成并保留 `package-lock.json`；Actions 使用 `npm ci` 和 setup-node 的 npm 缓存，依赖变化时须同步更新锁文件。
-9. 构建后必须直接检查 `dist/index.html` 仍包含 `cesium/Cesium.js`，`dist/dev/railway-check/index.html` 不含 Cesium 标签且资源路径为 `../../assets/...`；再用静态服务器实际打开检查页。
+9. 构建后必须直接检查 `dist/index.html` 仍包含 `cesium/Cesium.js`，`dist/dev/railway-check/index.html` 不含 Cesium 标签且资源路径为 `../../assets/...`；再用静态服务器实际打开检查页。`npm run build` 已自动调用 `scripts/verify-dist.mjs` 检查这些条件、33 个分省文件、Cesium 运行时、背景图和 `.nojekyll`。
+10. 发布后检查线上 `index.html` 是否引用 `./assets/main-*.js` 且不含 `/src/main.ts`；若仍是源码入口，先确认 Pages Source 没有被切回“Deploy from a branch”。
 
 ## 6. Cesium ion Token
 
@@ -374,6 +376,7 @@ Token 集中在 `src/config.ts` 的 `APP_CONFIG.cesiumIonToken`，初始化时�
 | 相机 `lookAt` 会改变相机参考框架 | 自由飞行前先恢复 `Matrix4.IDENTITY`，跟随期间保留用户朝向。 |
 | 在 `lookAt` 后直接写入世界坐标导致相机抽搐 | `camera.position` 使用当前参考系坐标；世界坐标修正值必须先用 `worldToCameraCoordinatesPoint` 转换，不得直接赋值。 |
 | GitHub Pages 子路径和中文文件名 | 使用相对 base 和标准 URL 编码，不拼接硬编码根路径。 |
+| GitHub Pages 白屏 | Pages 必须从 Actions 的 `dist` 发布；若来源是分支根目录，页面会引用 `/src/main.ts` 并以 404/MIME 错误显示空白。`npm run build` 的 `scripts/verify-dist.mjs` 会拒绝这种产物；发布后核对线上 `index.html` 含 `./assets/main-*.js`。 |
 | Actions 的 npm 缓存通常要求 lockfile | 已提交 `package-lock.json`，使用 `npm ci` 并启用 setup-node 的 npm 缓存；依赖变化时同步更新锁文件。 |
 | 浏览器关闭时 IndexedDB 异步保存不可靠 | 周期自动保存、后台保存和手动导出共同保障。 |
 | 全屏背景裁切 | 背景图固定 `inset: 0`，1518:1154 原图用 `cover` 居中裁切；边缘可能被裁掉，这是铺满屏幕的预期结果，不是失真。 |
@@ -1019,3 +1022,11 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - 修改 `JunctionMap.vue`：用 PointerEvents 的 `pointers` Map 跟踪多指；第二指按下时进入 pinch，以起始两指中点为锚点按距离比缩放，并跟随两指中点平移；松开一指后剩余手指继续单指平移，捏合结束不误选线路。`pointercancel` 清理多指状态并保持剩余手指可平移。
 - 复用 `src/map/junctionMap.ts` 的 `pinchView`，缩放沿用初始适配的 0.4–40 倍限制；鼠标滚轮、＋/－/复位按钮、单指拖动和 14 px 点击选线行为不变，画布继续使用 `touch-action: none`。
 - 验证：`npm test` 26 个文件、157 项全部通过；`npm run build` 通过。390×844 触屏仿真下发双指 pointer 事件，画布 `toDataURL` 前后不同、比例尺由 200 m 变为 100 m，选中线路索引保持 -1，控制台无应用错误。正式数据、拓扑、动力学和存档 V1 未修改。
+
+### 2026-11-24 — GitHub Pages 白屏修复
+
+- 用户反馈：GitHub Pages 部署在 `drive` 分支后白屏，本地 8062 开发服务正常。
+- 根因：仓库 Pages 仍为 `build_type=legacy`、来源 `drive:/`，线上首页实际是 Vite 源码 `index.html`，`<script src="/src/main.ts">` 请求 GitHub Pages 域名根路径的 `/src/main.ts`（404；即使命中仓库内文件，MIME 也是 `video/mp2t`），应用入口未执行，`#app` 为空。工作流本身 build/deploy 成功，但被同分支的 “pages build and deployment” 旧发布覆盖。
+- 修复：通过 Pages API 将 `build_type` 从 `legacy` 切换为 `workflow`；在 `drive` 上重新运行 `Deploy to GitHub Pages`（run `45329716579`）后，线上 `index.html` 已引用 `./assets/main-*.js`，Cesium、数据与 `.nojekyll` 均返回 200。
+- 防回归：新增 `scripts/verify-dist.mjs` 和 `npm run verify:dist`，`npm run build` 构建后自动校验主入口不是 `/src/main.ts`、Cesium 资源、33 个分省 GeoJSON、背景图、检查页入口和 `.nojekyll`；README 与 AGENTS 第 5 节记录 Pages Source 必须为 GitHub Actions。
+- 验证：`npm test` 26 文件 157 项通过；`npm run build` 通过（含 verify:dist）。headless Chromium 对线上地址完成开始页 → 新游戏 → 江苏 → 搜索南京南 → 车站始发 → 驾驶 HUD 全流程，控制台无应用错误；仅 headless SwiftShader 报 WebGL 警告，三维画面黑屏为环境限制，不作为视觉验收。正式数据、拓扑、动力学和存档 V1 未修改。
