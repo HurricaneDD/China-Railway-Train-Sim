@@ -95,7 +95,7 @@ export const APP_CONFIG = {
   simulation: {
     fixedStep: 1 / 60,
     maxFrameDelta: 0.1,
-    speedOptions: [1, 5, 10, 20, 30, 50],
+    speedOptions: [1, 2, 5, 10, 20, 30, 50],
     maxStepsPerFrame: 300,
     junctionPreviewDistance: 120,
     junctionStopDistance: 35,
@@ -126,7 +126,7 @@ export const APP_CONFIG = {
     minRange: 35,
     maxRange: 900,
     smoothing: 5,
-    // “第三人称固定”：默认后上方 30°、高于车头 150 m、俯角 -10°。
+    // “第三人称后方/前方”：默认后方或前方 30°、高于车头 150 m、俯角 -10°；前方朝向与车头相反。
     // 左键/单指拖动只转动镜头朝向，不移动相机；滚轮/双指捏合调整相对车头高度并同步改变位置。
     // 车头位于视轴下方 20°，因此该视角使用 50° 竖直视场，避免列车落到画面外。
     fixedView: {

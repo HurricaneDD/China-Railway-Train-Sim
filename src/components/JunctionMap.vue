@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { JunctionRequest, LonLat } from '../types';
 import { BASEMAPS, type BasemapProvider } from '../map/basemap';
 import { BasemapTiles, drawMapBackground, drawNorthArrow, drawScaleBar } from '../map/canvasLayer';
-import { closestScreenPath, fitLonLatPaths, panViewBy, pointAtPathFraction, screenOf, zoomViewAt, type MapView, type ScreenPath, type ScreenPoint } from '../map/junctionMap';
+import { closestScreenPath, fitLonLatPaths, panViewBy, pinchView, pointAtPathFraction, screenOf, zoomViewAt, type MapView, type ScreenPath, type ScreenPoint } from '../map/junctionMap';
 import { wgs84ToGcj02, gcj02ToWgs84 } from '../utils/gcj02';
 import { projectMercator, unprojectMercator } from '../utils/mercator';
 
@@ -26,6 +26,9 @@ let renderFrame = 0;
 let disposed = false;
 let hitPaths: ScreenPath[] = [];
 let drag: { x: number; y: number; start: MapView; moved: boolean } | undefined;
+let pinch: { distance: number; midpoint: ScreenPoint; view: MapView } | undefined;
+let gestureMoved = false;
+const pointers = new Map<number, ScreenPoint>();
 
 const tiles = new BasemapTiles();
 
@@ -306,10 +309,52 @@ function updateHover(point: ScreenPoint): void {
   if (canvas.value) canvas.value.style.cursor = id ? 'pointer' : 'grab';
 }
 
+function touchPair(): [ScreenPoint, ScreenPoint] | undefined {
+  if (pointers.size < 2) return;
+  const points = [...pointers.values()];
+  return [points[0], points[1]];
+}
+
+function startPinch(): void {
+  const pair = touchPair();
+  if (!pair || !view) return;
+  drag = undefined;
+  gestureMoved = true;
+  pinch = {
+    distance: Math.max(1, Math.hypot(pair[1].x - pair[0].x, pair[1].y - pair[0].y)),
+    midpoint: { x: (pair[0].x + pair[1].x) / 2, y: (pair[0].y + pair[1].y) / 2 },
+    view: { ...view },
+  };
+}
+
+function updatePinch(): void {
+  const pair = touchPair();
+  if (!pair || !pinch) return;
+  const distance = Math.max(1, Math.hypot(pair[1].x - pair[0].x, pair[1].y - pair[0].y));
+  const midpoint = { x: (pair[0].x + pair[1].x) / 2, y: (pair[0].y + pair[1].y) / 2 };
+  view = pinchView(pinch.view, size.value.width, size.value.height, pinch.midpoint, pinch.distance, midpoint, distance, baseScale * 0.4, baseScale * 40);
+  requestRender();
+}
+
+function releasePointer(event: PointerEvent): void {
+  try {
+    if (canvas.value?.hasPointerCapture(event.pointerId)) canvas.value.releasePointerCapture(event.pointerId);
+  } catch {
+    /* The pointer may already be released or synthetic. */
+  }
+}
+
 function onPointerDown(event: PointerEvent): void {
   if (event.button !== 0 || !view) return;
+  const point = localPoint(event);
+  pointers.set(event.pointerId, point);
   try { canvas.value?.setPointerCapture(event.pointerId); } catch { /* Synthetic events and older browsers may not own the pointer. */ }
-  drag = { ...localPoint(event), start: { ...view }, moved: false };
+  if (pointers.size >= 2) {
+    startPinch();
+  } else {
+    gestureMoved = false;
+    drag = { ...point, start: { ...view }, moved: false };
+  }
   if (hoverId.value) {
     hoverId.value = undefined;
     requestRender();
@@ -318,8 +363,13 @@ function onPointerDown(event: PointerEvent): void {
 }
 
 function onPointerMove(event: PointerEvent): void {
+  const point = localPoint(event);
+  if (pointers.has(event.pointerId)) pointers.set(event.pointerId, point);
+  if (pointers.size >= 2) {
+    updatePinch();
+    return;
+  }
   if (drag) {
-    const point = localPoint(event);
     const dx = point.x - drag.x;
     const dy = point.y - drag.y;
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.moved = true;
@@ -327,20 +377,33 @@ function onPointerMove(event: PointerEvent): void {
     requestRender();
     return;
   }
-  updateHover(localPoint(event));
+  updateHover(point);
 }
 
 function finishPointer(event: PointerEvent, allowSelect: boolean): void {
-  if (!drag) return;
   const point = localPoint(event);
-  const wasMoved = drag.moved;
+  pointers.delete(event.pointerId);
+  releasePointer(event);
+  if (pointers.size >= 2) {
+    updatePinch();
+    return;
+  }
+  if (pointers.size === 1) {
+    pinch = undefined;
+    const remaining = [...pointers.values()][0];
+    // Continue one-finger panning after a pinch, but never turn it into a click.
+    drag = { ...remaining, start: view ? { ...view } : { cx: 0, cy: 0, scale: 1 }, moved: true };
+    return;
+  }
+  pinch = undefined;
+  const wasMoved = drag?.moved ?? true;
   drag = undefined;
-  try { canvas.value?.releasePointerCapture(event.pointerId); } catch { /* No captured pointer. */ }
   const id = findOptionAt(point);
   hoverId.value = id;
   if (canvas.value) canvas.value.style.cursor = id ? 'pointer' : 'grab';
   requestRender();
-  if (allowSelect && !wasMoved && id) emit('select', id);
+  if (allowSelect && !wasMoved && !gestureMoved && id) emit('select', id);
+  gestureMoved = false;
 }
 
 function onPointerUp(event: PointerEvent): void {
@@ -348,11 +411,24 @@ function onPointerUp(event: PointerEvent): void {
 }
 
 function onPointerCancel(event: PointerEvent): void {
-  finishPointer(event, false);
+  pointers.delete(event.pointerId);
+  releasePointer(event);
+  if (pointers.size === 0) {
+    drag = undefined;
+    pinch = undefined;
+    gestureMoved = false;
+    if (canvas.value) canvas.value.style.cursor = 'grab';
+    return;
+  }
+  if (pointers.size < 2) {
+    pinch = undefined;
+    const remaining = [...pointers.values()][0];
+    drag = { ...remaining, start: view ? { ...view } : { cx: 0, cy: 0, scale: 1 }, moved: true };
+  }
 }
 
 function onPointerLeave(): void {
-  if (drag) return;
+  if (drag || pointers.size) return;
   if (hoverId.value) {
     hoverId.value = undefined;
     requestRender();
@@ -395,7 +471,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="host" class="junction-map-host">
-    <canvas ref="canvas" class="junction-map-canvas" role="img" tabindex="0" aria-label="附近配线图。点击线路选择走行路径；滚轮缩放，拖动平移，也可使用加号和减号按钮缩放。" @wheel.prevent="onWheel" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerCancel" @pointerleave="onPointerLeave" @keydown="onKeyDown" />
+    <canvas ref="canvas" class="junction-map-canvas" role="img" tabindex="0" aria-label="附近配线图。点击线路选择走行路径；滚轮或双指缩放，拖动平移，也可使用加号和减号按钮缩放。" @wheel.prevent="onWheel" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerCancel" @pointerleave="onPointerLeave" @keydown="onKeyDown" />
     <div class="junction-map-toolbar" aria-label="底图选择">
       <span>高德底图</span>
       <button :class="{ active: basemap === 'amap-satellite' }" :aria-pressed="basemap === 'amap-satellite'" @click="setBasemap('amap-satellite')">卫星</button>
@@ -410,7 +486,7 @@ onBeforeUnmount(() => {
     <p v-if="hoveredOption" class="junction-map-hover">
       点击选择 {{ String(junction.options.indexOf(hoveredOption) + 1).padStart(2, '0') }} · {{ hoveredOption.name }}
     </p>
-    <p v-else class="junction-map-pan-hint">滚轮缩放 · 拖动平移 · 点击线路选择</p>
+    <p v-else class="junction-map-pan-hint">滚轮/双指缩放 · 拖动平移 · 点击线路选择</p>
     <p class="junction-map-attribution">{{ provider.attribution }}{{ coordinateNotice }}</p>
     <p v-if="!optionCount" class="junction-map-notice error">没有可选线路</p>
   </div>

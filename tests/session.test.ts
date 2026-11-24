@@ -203,8 +203,10 @@ describe('驾驶与编组', () => {
 });
 
 describe('人工检查倍速', () => {
-  it('只接受配置中的 1/5/10/20/30/50 倍速', () => {
+  it('只接受配置中的 1/2/5/10/20/30/50 倍速', () => {
     const { session } = sessionOnLine();
+    expect(session.setSimulationSpeed(2)).toBe(true);
+    expect(session.simulationSpeed).toBe(2);
     expect(session.setSimulationSpeed(5)).toBe(true);
     expect(session.simulationSpeed).toBe(5);
     expect(session.setSimulationSpeed(7)).toBe(false);

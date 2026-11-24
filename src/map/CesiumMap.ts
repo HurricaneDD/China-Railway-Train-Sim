@@ -9,6 +9,7 @@ import type { GameSession } from '../core/session';
 import type { CameraMode, LonLat, RailSegment, Station } from '../types';
 import { BASEMAPS, DEFAULT_MAP_TILES, type MapTileId } from './basemap';
 import { cabCameraFov, cabCameraPose, defaultFixedCameraView, fixedCameraFov, fixedCameraPose, rotateFixedCamera, zoomFixedCamera, zoomFixedCameraByScale } from './cameraPose';
+import type { FixedCameraSide } from './cameraPose';
 import { createGcj02ImageryProvider } from './gcj02ImageryProvider';
 import { RailRenderer } from './RailRenderer';
 import { SceneryManager } from './SceneryManager';
@@ -316,8 +317,18 @@ export class CesiumMap {
     this.cameraRangeDirty = true;
   }
 
+  private isFixedMode(mode: CameraMode = this.cameraMode): boolean {
+    return mode === 'fixed' || mode === 'fixed-front';
+  }
+
+  private fixedSide(): FixedCameraSide {
+    return this.cameraMode === 'fixed-front' ? 'front' : 'rear';
+  }
+
   setCameraMode(mode: CameraMode): void {
-    if (mode === 'fixed' && this.cameraMode !== mode) this.fixedView = defaultFixedCameraView();
+    if (this.isFixedMode(mode) && this.cameraMode !== mode) {
+      this.fixedView = defaultFixedCameraView(mode === 'fixed-front' ? 'front' : 'rear');
+    }
     this.stopFixedInteraction();
     this.cameraMode = mode;
     this.cameraTarget = undefined;
@@ -325,7 +336,7 @@ export class CesiumMap {
     this.cameraRangeDirty = true;
     this.viewer.camera.lookAtTransform(Matrix4.IDENTITY);
     // 固定视角会为取景放宽视场，切回驾驶室/自由视角时恢复默认镜头。
-    if (mode !== 'fixed') this.applyFov(this.defaultFov);
+    if (!this.isFixedMode(mode)) this.applyFov(this.defaultFov);
     if (mode !== 'cab') {
       this.cabRenderer?.hide();
       if (this.viewer.camera.frustum instanceof PerspectiveFrustum) this.viewer.camera.frustum.near = 1;
@@ -357,23 +368,23 @@ export class CesiumMap {
     // Cesium maps a single touch to LEFT_DOWN / MOUSE_MOVE / LEFT_UP, including cancellation.
     this.handler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
       this.downPosition = Cartesian2.clone(event.position);
-      this.fixedDragging = !this.fixedPinching && this.cameraMode === 'fixed' && !!this.session?.running;
+      this.fixedDragging = !this.fixedPinching && this.isFixedMode() && !!this.session?.running;
     }, ScreenSpaceEventType.LEFT_DOWN);
     this.handler.setInputAction(this.stopFixedDrag, ScreenSpaceEventType.LEFT_UP);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.MotionEvent) => {
-      if (!this.fixedDragging || this.fixedPinching || this.cameraMode !== 'fixed' || !this.session?.running) return;
+      if (!this.fixedDragging || this.fixedPinching || !this.isFixedMode() || !this.session?.running) return;
       rotateFixedCamera(this.fixedView, event.endPosition.x - event.startPosition.x, event.endPosition.y - event.startPosition.y);
     }, ScreenSpaceEventType.MOUSE_MOVE);
     this.handler.setInputAction((delta: number) => {
-      if (this.cameraMode === 'fixed' && this.session?.running) zoomFixedCamera(this.fixedView, delta);
+      if (this.isFixedMode() && this.session?.running) zoomFixedCamera(this.fixedView, delta);
     }, ScreenSpaceEventType.WHEEL);
     this.handler.setInputAction(() => {
       // A second finger must stop the one-finger rotate gesture before pinch begins.
       this.fixedDragging = false;
-      this.fixedPinching = this.cameraMode === 'fixed' && !!this.session?.running;
+      this.fixedPinching = this.isFixedMode() && !!this.session?.running;
     }, ScreenSpaceEventType.PINCH_START);
     this.handler.setInputAction((event: ScreenSpaceEventHandler.TwoPointMotionEvent) => {
-      if (!this.fixedPinching || this.cameraMode !== 'fixed' || !this.session?.running) return;
+      if (!this.fixedPinching || !this.isFixedMode() || !this.session?.running) return;
       const pinch = event as unknown as FixedPinchMoveEvent;
       const start = pinch.distance?.startPosition.y ?? 0;
       const end = pinch.distance?.endPosition.y ?? 0;
@@ -423,7 +434,7 @@ export class CesiumMap {
       if (points[0]) {
         const point = points[0];
         if (inCab) this.driveFromCab(point.lon, point.lat, point.height, point.heading, dt);
-        else if (this.cameraMode === 'fixed') this.followFixed(point.lon, point.lat, point.height, point.heading);
+        else if (this.isFixedMode()) this.followFixed(point.lon, point.lat, point.height, point.heading, this.fixedSide());
         else this.follow(point.lon, point.lat, point.height, point.heading, dt);
       }
     } else {
@@ -458,10 +469,10 @@ export class CesiumMap {
     });
   }
 
-  private followFixed(lon: number, lat: number, height: number, heading: number): void {
+  private followFixed(lon: number, lat: number, height: number, heading: number, side: FixedCameraSide): void {
     const canvas = this.viewer.scene.canvas;
     this.applyFov(fixedCameraFov(canvas.clientWidth, canvas.clientHeight));
-    const pose = fixedCameraPose({ lon, lat, height }, heading, this.fixedView);
+    const pose = fixedCameraPose({ lon, lat, height }, heading, this.fixedView, side);
     this.viewer.camera.lookAtTransform(Matrix4.IDENTITY);
     this.viewer.camera.setView({
       destination: Cartesian3.fromDegrees(pose.lon, pose.lat, pose.altitude),

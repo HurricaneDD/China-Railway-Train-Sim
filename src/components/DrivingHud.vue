@@ -142,7 +142,10 @@ onBeforeUnmount(() => {
               <span>第三人称自由</span><small>外部视角</small><span class="menu-check">{{ cameraMode === 'free' ? '✓' : '' }}</span>
             </button>
             <button role="menuitemradio" :aria-checked="cameraMode === 'fixed'" :class="{ active: cameraMode === 'fixed' }" @click="chooseView('fixed')">
-              <span>第三人称固定</span><small>默认高 150 m</small><span class="menu-check">{{ cameraMode === 'fixed' ? '✓' : '' }}</span>
+              <span>第三人称后方</span><small>后上方</small><span class="menu-check">{{ cameraMode === 'fixed' ? '✓' : '' }}</span>
+            </button>
+            <button role="menuitemradio" :aria-checked="cameraMode === 'fixed-front'" :class="{ active: cameraMode === 'fixed-front' }" @click="chooseView('fixed-front')">
+              <span>第三人称前方</span><small>前方对向</small><span class="menu-check">{{ cameraMode === 'fixed-front' ? '✓' : '' }}</span>
             </button>
           </div>
         </div>
@@ -194,7 +197,7 @@ onBeforeUnmount(() => {
       <div v-else-if="session.connectionWarning" class="route-status" role="status">{{ session.connectionWarning }}</div>
 
       <div v-if="cameraMode !== 'cab'" class="camera-hint">
-        {{ cameraMode === 'fixed' ? '左键/单指拖动转动镜头 · 滚轮/双指捏合调整高度' : '左键拖动旋转 · 滚轮缩放' }}
+        {{ cameraMode === 'fixed' || cameraMode === 'fixed-front' ? '左键/单指拖动转动镜头 · 滚轮/双指捏合调整高度' : '左键拖动旋转 · 滚轮缩放' }}
         <div v-if="cameraMode === 'free'"><button @click="$emit('camera', cameraRange - 35)">−</button><button @click="$emit('camera', cameraRange + 35)">＋</button></div>
       </div>
     </main>

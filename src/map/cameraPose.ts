@@ -42,6 +42,8 @@ export function cabCameraFov(width: number, height: number): number {
   return horizontalFovForVertical(vertical, aspect);
 }
 
+export type FixedCameraSide = 'rear' | 'front';
+
 export interface FixedCameraView {
   /** Relative altitude of the camera above the train head. */
   height: number;
@@ -51,8 +53,12 @@ export interface FixedCameraView {
   pitch: number;
 }
 
-export function defaultFixedCameraView(): FixedCameraView {
-  return { height: APP_CONFIG.camera.fixedView.height, yaw: 0, pitch: APP_CONFIG.camera.fixedView.pitchDegrees };
+export function defaultFixedCameraView(side: FixedCameraSide = 'rear'): FixedCameraView {
+  return {
+    height: APP_CONFIG.camera.fixedView.height,
+    yaw: side === 'front' ? 180 : 0,
+    pitch: APP_CONFIG.camera.fixedView.pitchDegrees,
+  };
 }
 
 /**
@@ -68,7 +74,7 @@ export function rotateFixedCamera(view: FixedCameraView, dx: number, dy: number)
 
 /**
  * Wheel zoom changes the camera height and, through `fixedCameraPose`, its
- * rearward distance; it never changes the viewing direction.
+ * longitudinal distance; it never changes the viewing direction.
  * Cesium wheel delta is positive toward the user (zoom in).
  */
 export function zoomFixedCamera(view: FixedCameraView, delta: number): void {
@@ -89,25 +95,27 @@ export function zoomFixedCameraByScale(view: FixedCameraView, scale: number): vo
 }
 
 /**
- * The camera position is determined only by the train head and the wheel-controlled
- * height: it stays directly behind the train at the configured 30° elevation.
- * View yaw/pitch rotate the camera in place, so dragging never moves it.
+ * The camera position is determined only by the train head, the side and the
+ * wheel-controlled height. 'rear' sits at the configured 30° elevation behind
+ * the train; 'front' is its mirror image ahead of the train. View yaw/pitch
+ * rotate the camera in place, so dragging never moves it.
  */
 export function fixedCameraPose(head: LonLat & { height: number }, trainHeading: number,
-  view: FixedCameraView = defaultFixedCameraView()): FixedCameraPose {
+  view?: FixedCameraView, side: FixedCameraSide = 'rear'): FixedCameraPose {
+  const state = view ?? defaultFixedCameraView(side);
   const config = APP_CONFIG.camera.fixedView;
   const elevation = config.elevationDegrees * Math.PI / 180;
-  const behind = view.height / Math.tan(elevation);
-  const heading = ((trainHeading + view.yaw) % 360 + 360) % 360;
+  const horizontal = state.height / Math.tan(elevation);
+  const heading = ((trainHeading + state.yaw) % 360 + 360) % 360;
   // The position uses the train heading, never the view yaw.
-  // offsetPoint uses east=0°, unlike Cesium's north=0°.
-  const position = offsetPoint(head, trainHeading + 90, behind);
+  // offsetPoint uses east=0°, unlike Cesium's north=0°. -90 is ahead, +90 behind.
+  const position = offsetPoint(head, side === 'front' ? trainHeading - 90 : trainHeading + 90, horizontal);
   return {
     lon: position.lon,
     lat: position.lat,
-    altitude: head.height + view.height,
+    altitude: head.height + state.height,
     heading,
-    pitch: view.pitch * Math.PI / 180,
+    pitch: state.pitch * Math.PI / 180,
   };
 }
 

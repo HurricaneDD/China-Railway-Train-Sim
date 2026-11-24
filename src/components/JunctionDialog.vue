@@ -59,10 +59,6 @@ const copyDiagnostics = async () => {
             <p class="junction-current">当前线路：<b>{{ junction.currentName }}</b></p>
           </div>
         </div>
-        <div class="junction-head-status">
-          <span class="junction-status-dot" />
-          <span><b>{{ junction.options.length }}</b> 条可行线路</span>
-        </div>
       </header>
 
       <div class="junction-body">
@@ -108,7 +104,6 @@ const copyDiagnostics = async () => {
               <span>确认所选路径</span>
               <b>→</b>
             </button>
-            <small class="junction-fine-print">确认后列车按所选线路继续；本提示不替代真实行车凭证与信号确认。</small>
             <details v-if="isDev" class="junction-diagnostics">
               <summary>开发诊断</summary>
               <button @click="copyDiagnostics">复制 JSON</button>

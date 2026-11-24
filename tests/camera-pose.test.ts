@@ -44,7 +44,7 @@ describe('驾驶室沿轨平视', () => {
   });
 });
 
-describe('第三人称固定视角', () => {
+describe('第三人称后方视角', () => {
   const head = { lon: 118.8, lat: 32, height: 42 };
 
   it('位于车头后上方 30°、高 150 m', () => {
@@ -156,5 +156,52 @@ describe('第三人称固定视角', () => {
   it('竖屏时 Cesium fov 直接作为竖直视场', () => {
     expect(horizontalFovForVertical(0.8, 0.5)).toBeCloseTo(0.8, 12);
     expect(horizontalFovForVertical(0.8, 2)).toBeGreaterThan(0.8);
+  });
+});
+
+
+describe('第三人称前方视角', () => {
+  const head = { lon: 118.8, lat: 32, height: 42 };
+
+  it('默认位置与后方视角对称，朝向与车头相反', () => {
+    const rear = fixedCameraPose(head, 90);
+    const front = fixedCameraPose(head, 90, undefined, 'front');
+    expect(defaultFixedCameraView('front')).toEqual({ height: 150, yaw: 180, pitch: -10 });
+    expect(front.altitude).toBeCloseTo(rear.altitude, 9);
+    expect(Math.abs(distance(head, front) - distance(head, rear))).toBeLessThan(1);
+    expect(Math.abs(bearing(head, front) - ((bearing(head, rear) + 180) % 360))).toBeLessThan(1);
+    expect((front.heading - rear.heading + 360) % 360).toBeCloseTo(180, 9);
+    expect(front.pitch).toBeCloseTo(rear.pitch, 9);
+  });
+
+  it('位于机车头前方，默认朝车头相反方向', () => {
+    const front = fixedCameraPose(head, 37, undefined, 'front');
+    expect(Math.abs(bearing(head, front) - 37)).toBeLessThan(1);
+    expect(front.heading).toBeCloseTo(217);
+    expect(front.altitude - head.height).toBeCloseTo(150);
+    expect(front.pitch * 180 / Math.PI).toBeCloseTo(-10);
+    expect(Math.abs(distance(head, front) - 150 / Math.tan(Math.PI / 6))).toBeLessThan(1.5);
+  });
+
+  it('拖动和缩放沿用后方规则：只改变朝向或高度，位置保持在车头前方', () => {
+    const view = defaultFixedCameraView('front');
+    const base = fixedCameraPose(head, 90, view, 'front');
+    rotateFixedCamera(view, 100, 100);
+    const turned = fixedCameraPose(head, 90, view, 'front');
+    expect(turned.lon).toBe(base.lon);
+    expect(turned.lat).toBe(base.lat);
+    expect(turned.altitude).toBe(base.altitude);
+    expect(view.yaw).toBeCloseTo(200);
+    expect(turned.heading).toBeCloseTo(290);
+    expect(turned.pitch * 180 / Math.PI).toBeCloseTo(-30);
+    expect(Math.abs(bearing(head, turned) - 90)).toBeLessThan(1);
+
+    zoomFixedCameraByScale(view, 2);
+    const zoomed = fixedCameraPose(head, 90, view, 'front');
+    expect(zoomed.altitude - head.height).toBeCloseTo(75);
+    expect(zoomed.heading).toBeCloseTo(290);
+    expect(zoomed.pitch * 180 / Math.PI).toBeCloseTo(-30);
+    expect(Math.abs(bearing(head, zoomed) - 90)).toBeLessThan(1);
+    expect(distance(turned, zoomed)).toBeGreaterThan(1);
   });
 });
