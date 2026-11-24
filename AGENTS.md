@@ -1028,5 +1028,6 @@ D:/APPS/miniconda3/python.exe data/scripts/verify_outputs.py
 - 用户反馈：GitHub Pages 部署在 `drive` 分支后白屏，本地 8062 开发服务正常。
 - 根因：仓库 Pages 仍为 `build_type=legacy`、来源 `drive:/`，线上首页实际是 Vite 源码 `index.html`，`<script src="/src/main.ts">` 请求 GitHub Pages 域名根路径的 `/src/main.ts`（404；即使命中仓库内文件，MIME 也是 `video/mp2t`），应用入口未执行，`#app` 为空。工作流本身 build/deploy 成功，但被同分支的 “pages build and deployment” 旧发布覆盖。
 - 修复：通过 Pages API 将 `build_type` 从 `legacy` 切换为 `workflow`；在 `drive` 上重新运行 `Deploy to GitHub Pages`（run `45329716579`）后，线上 `index.html` 已引用 `./assets/main-*.js`，Cesium、数据与 `.nojekyll` 均返回 200。
+- 修复提交 `406dfa6` 已推送 `drive`；对应 Actions run [`45330321649`](https://github.com/HurricaneDD/China-Railway-Train-Sim/actions/runs/45330321649) 的 build（含 `verify:dist`）与 deploy 均成功，线上开始页、江苏预览、南京南车站始发和驾驶 HUD 复验通过。
 - 防回归：新增 `scripts/verify-dist.mjs` 和 `npm run verify:dist`，`npm run build` 构建后自动校验主入口不是 `/src/main.ts`、Cesium 资源、33 个分省 GeoJSON、背景图、检查页入口和 `.nojekyll`；README 与 AGENTS 第 5 节记录 Pages Source 必须为 GitHub Actions。
 - 验证：`npm test` 26 文件 157 项通过；`npm run build` 通过（含 verify:dist）。headless Chromium 对线上地址完成开始页 → 新游戏 → 江苏 → 搜索南京南 → 车站始发 → 驾驶 HUD 全流程，控制台无应用错误；仅 headless SwiftShader 报 WebGL 警告，三维画面黑屏为环境限制，不作为视觉验收。正式数据、拓扑、动力学和存档 V1 未修改。
